@@ -1,0 +1,66 @@
+paths:
+  train_csv: train.csv
+  generate_csv: generate.csv
+  train_image_dir: trainset
+  output_dir: generated_images
+  checkpoint_dir: checkpoints
+  sample_dir: samples
+  metrics_dir: reports
+  test_mu: test_mu.npy
+  test_sigma: test_sigma.npy
+seed: 1337
+image_size: 64
+data:
+  resize_policy: resize
+  horizontal_flip: true
+  flip_prob: 0.5
+  color_jitter: false
+  color_jitter_strength: 0.08
+training:
+  batch_size: 64
+  num_workers: 2
+  epochs: 100
+  max_steps: null
+  learning_rate: 0.0002
+  weight_decay: 0.01
+  grad_accum_steps: 1
+  mixed_precision: false
+  log_every: 50
+  checkpoint_every: 1000
+  sample_every: 1000
+diffusion:
+  timesteps: 1000
+  schedule: cosine
+model:
+  base_channels: 96
+  channel_mults: [1, 2, 3, 4]
+  attention_resolutions: [16, 8]
+  num_res_blocks: 1
+  dropout: 0.0
+  emb_dim: 384
+ema:
+  decay: 0.9999
+  update_after_step: 0
+  update_every: 1
+conditioning:
+  dropout_prob: 0.1
+sampling:
+  batch_size: 64
+  ddim_steps: 100
+  eta: 0.0
+  guidance_scale: 2.0
+  use_ema: true
+  overwrite: false
+validation:
+  final_expected_count: 2000
+  strict_count: true
+evaluation:
+  enable_fid: true
+  enable_clip_t: false
+packaging:
+  student_id: null
+  overwrite: false
+  zip_path: null
+fallback:
+  enabled: false
+  output_dir: fallback_outputs

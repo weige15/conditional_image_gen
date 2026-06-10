@@ -1,0 +1,33 @@
+project: Brainrot Image Gen
+date: 2026-06-11
+status: bootstrap_survey_complete_pdf_read
+question: "What is the best practical implementation strategy for a from-scratch conditional 64x64 brainrot image generator?"
+assignment:
+  output_count: 2000
+  output_resolution: "64x64"
+  conditions:
+    animals: 10
+    objects: 10
+    pairs: 100
+  train_images: 4799
+  metrics:
+    fid_weight: 0.5
+    clip_t_weight: 0.5
+  forbidden:
+    - "pretrained generative weights"
+    - "pretrained UNet / Transformer / diffusion model"
+    - "Diffusers-style high-level pipelines or training flows as the main model"
+  allowed_auxiliary:
+    - "pretrained VAE"
+    - "pretrained CLIP for feature/evaluation/conditioning support only"
+recommendation:
+  primary: "from-scratch conditional DDPM/DDIM"
+  backbone: "compact UNet with animal/object/pair embeddings"
+  training: "epsilon prediction, cosine schedule, EMA, condition dropout"
+  sampling: "DDIM 50-250 steps with classifier-free guidance sweep"
+  fallback: "conditional StyleGAN2-ADA from scratch"
+next_steps:
+  - "Inspect local repository/dataset/baseline files."
+  - "Implement dataset loader and conditional UNet DDPM."
+  - "Add generation script that exactly matches generate.csv filenames."
+  - "Add local validation for image count, size, RGB mode, FID, and CLIP-T proxy."
