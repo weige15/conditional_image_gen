@@ -65,7 +65,11 @@ def main() -> None:
         raise SystemExit("generated image validation failed: " + "; ".join(report.errors))
 
     image_count = copy_pngs(generated_images, res_dir, overwrite=args.overwrite)
-    copied_mu = copy_if_present(Path(args.test_mu) if args.test_mu else None, ref_dir / "test_mu.npy", overwrite=args.overwrite)
+    copied_mu = copy_if_present(
+        Path(args.test_mu) if args.test_mu else None,
+        ref_dir / "test_mu.npy",
+        overwrite=args.overwrite,
+    )
     copied_sigma = copy_if_present(
         Path(args.test_sigma) if args.test_sigma else None,
         ref_dir / "test_sigma.npy",

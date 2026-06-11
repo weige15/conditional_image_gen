@@ -17,6 +17,7 @@ def main() -> None:
     parser.add_argument("--train-image-dir")
     parser.add_argument("--checkpoint-dir")
     parser.add_argument("--max-steps", type=int)
+    parser.add_argument("--log-every", type=int)
     parser.add_argument("--device")
     args = parser.parse_args()
     config = load_config(args.config)
@@ -26,6 +27,7 @@ def main() -> None:
         paths__train_image_dir=args.train_image_dir,
         paths__checkpoint_dir=args.checkpoint_dir,
         training__max_steps=args.max_steps,
+        training__log_every=args.log_every,
     )
     result = train(config, max_steps=args.max_steps, device=args.device)
     print(result)
