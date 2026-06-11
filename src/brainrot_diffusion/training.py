@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import torch
@@ -62,6 +63,18 @@ def train(
 
     step = 0
     last_loss = 0.0
+    started_at = time.time()
+    print(
+        {
+            "event": "training_started",
+            "device": str(run_device),
+            "dataset_size": len(dataset),
+            "batch_size": config.training.batch_size,
+            "target_steps": target_steps,
+            "checkpoint_dir": config.paths.checkpoint_dir,
+        },
+        flush=True,
+    )
     model.train()
     while step < target_steps:
         for batch in loader:
@@ -88,8 +101,9 @@ def train(
             last_loss = float(loss.detach().cpu() * config.training.grad_accum_steps)
             step += 1
             if step % config.training.checkpoint_every == 0 or step >= target_steps:
+                checkpoint_path = Path(config.paths.checkpoint_dir) / f"checkpoint_step_{step}.pt"
                 save_checkpoint(
-                    Path(config.paths.checkpoint_dir) / f"checkpoint_step_{step}.pt",
+                    checkpoint_path,
                     model=model,
                     ema_state=ema.state_dict(),
                     optimizer=optimizer,
@@ -98,6 +112,24 @@ def train(
                     step=step,
                     epoch=0,
                     seed_metadata=seed_metadata,
+                )
+                print(
+                    {"event": "checkpoint_saved", "step": step, "path": str(checkpoint_path)},
+                    flush=True,
+                )
+            if step == 1 or step % config.training.log_every == 0 or step >= target_steps:
+                elapsed = time.time() - started_at
+                steps_per_second = step / elapsed if elapsed > 0 else 0.0
+                print(
+                    {
+                        "event": "train_step",
+                        "step": step,
+                        "target_steps": target_steps,
+                        "loss": round(last_loss, 6),
+                        "elapsed_sec": round(elapsed, 1),
+                        "steps_per_sec": round(steps_per_second, 4),
+                    },
+                    flush=True,
                 )
             if step >= target_steps:
                 break
