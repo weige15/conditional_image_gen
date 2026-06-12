@@ -8,7 +8,7 @@ paths:
 
 data:
   image_size: 64
-  random_horizontal_flip: false
+  random_horizontal_flip: true
   num_workers: 2
 
 model:
@@ -16,7 +16,7 @@ model:
   base_channels: 96
   channel_mults: [1, 2, 2, 4]
   blocks_per_level: 2
-  dropout: 0.1
+  dropout: 0.0
   attention_resolutions: [16]
 
 diffusion:
@@ -25,10 +25,10 @@ diffusion:
 
 optimizer:
   lr: 0.0002
-  weight_decay: 0.01
+  weight_decay: 0.0
   batch_size: 64
   gradient_accumulation_steps: 1
-  max_steps: 100000
+  max_steps: 200000
   mixed_precision: false
 
 ema:
@@ -36,7 +36,7 @@ ema:
 
 training:
   seed: 1234
-  condition_dropout: 0.1
+  condition_dropout: 0.05
   log_every: 50
   save_every: 1000
   resume: null
@@ -44,8 +44,8 @@ training:
 sampling:
   sampler: ddim
   batch_size: 64
-  steps: 100
+  steps: 250
   eta: 0.0
-  guidance_scale: 1.5
+  guidance_scale: 1.0
   seed: 1234
   use_ema: true
