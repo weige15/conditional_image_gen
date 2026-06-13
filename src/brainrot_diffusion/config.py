@@ -37,7 +37,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "batch_size": 64,
         "gradient_accumulation_steps": 1,
         "max_steps": 200000,
-        "mixed_precision": False,
+        "mixed_precision": True,
     },
     "ema": {"decay": 0.9999},
     "training": {
@@ -139,6 +139,7 @@ def apply_cli_overrides(config_path: str | None, args: Any) -> dict[str, Any]:
         ("output_dir", "paths", "output_dir"),
         ("max_steps", "optimizer", "max_steps"),
         ("batch_size", "optimizer", "batch_size"),
+        ("mixed_precision", "optimizer", "mixed_precision"),
         ("resume", "training", "resume"),
         ("sampler", "sampling", "sampler"),
         ("steps", "sampling", "steps"),

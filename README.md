@@ -25,8 +25,11 @@ python scripts/train.py \
   --train-csv dataset/train.csv \
   --train-image-dir dataset/trainset \
   --checkpoint-dir checkpoints \
-  --max-steps 1000
+  --max-steps 1000 \
+  --mixed-precision
 ```
+
+`optimizer.mixed_precision` is enabled by default and only activates on CUDA. Use `--no-mixed-precision` to force full precision.
 
 Checkpoints contain raw model weights, EMA state, optimizer state, config, diffusion metadata, architecture metadata, seed metadata, progress counters, and stable condition mappings.
 

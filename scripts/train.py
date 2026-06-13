@@ -19,6 +19,7 @@ def main() -> None:
     parser.add_argument("--checkpoint-dir")
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--mixed-precision", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--resume")
     args = parser.parse_args()
     config = apply_cli_overrides(args.config, args)

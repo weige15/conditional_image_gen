@@ -29,7 +29,7 @@ optimizer:
   batch_size: 64
   gradient_accumulation_steps: 1
   max_steps: 200000
-  mixed_precision: false
+  mixed_precision: true
 
 ema:
   decay: 0.9999

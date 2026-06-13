@@ -46,17 +46,20 @@ def _checkpoint_state(
     model: torch.nn.Module,
     ema: EMA,
     optimizer: torch.optim.Optimizer,
+    scaler: torch.cuda.amp.GradScaler | torch.amp.GradScaler,
     step: int,
     epoch: int,
     config: dict[str, Any],
     mappings: dict[str, Any],
     diffusion: GaussianDiffusion,
     seed: int,
+    mixed_precision_enabled: bool,
 ) -> dict[str, Any]:
     return {
         "model": model.state_dict(),
         "ema": ema.state_dict(),
         "optimizer": optimizer.state_dict(),
+        "amp_scaler": scaler.state_dict(),
         "step": step,
         "epoch": epoch,
         "config": config,
@@ -64,7 +67,20 @@ def _checkpoint_state(
         "diffusion": diffusion.metadata(),
         "architecture": getattr(model, "architecture", {}),
         "seed": {"seed": seed, "torch_initial_seed": torch.initial_seed()},
+        "mixed_precision": {"enabled": mixed_precision_enabled},
     }
+
+
+def _make_grad_scaler(enabled: bool):
+    if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
+        return torch.amp.GradScaler("cuda", enabled=enabled)
+    return torch.cuda.amp.GradScaler(enabled=enabled)
+
+
+def _cuda_autocast(enabled: bool):
+    if hasattr(torch, "amp") and hasattr(torch.amp, "autocast"):
+        return torch.amp.autocast(device_type="cuda", enabled=enabled)
+    return torch.cuda.amp.autocast(enabled=enabled)
 
 
 def train(config: dict[str, Any]) -> TrainResult:
@@ -102,6 +118,8 @@ def train(config: dict[str, Any]) -> TrainResult:
         lr=float(config["optimizer"]["lr"]),
         weight_decay=float(config["optimizer"].get("weight_decay", 0.0)),
     )
+    mixed_precision_enabled = bool(config["optimizer"].get("mixed_precision", False)) and device.type == "cuda"
+    scaler = _make_grad_scaler(mixed_precision_enabled)
     ema = EMA(model, decay=float(config["ema"]["decay"]))
     start_step = 0
     start_epoch = 0
@@ -111,6 +129,8 @@ def train(config: dict[str, Any]) -> TrainResult:
         model.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
         ema.load_state_dict(state["ema"])
+        if "amp_scaler" in state:
+            scaler.load_state_dict(state["amp_scaler"])
         start_step = int(state["step"])
         start_epoch = int(state["epoch"])
 
@@ -134,13 +154,15 @@ def train(config: dict[str, Any]) -> TrainResult:
             conditions = _condition_batch(batch, device)
             conditions = drop_conditions(conditions, dropout_p, null_ids=null_ids)
             t = torch.randint(0, diffusion.timesteps, (images.shape[0],), device=device, dtype=torch.long)
-            loss = diffusion.training_loss(model, images, t, conditions) / grad_accum
+            with _cuda_autocast(mixed_precision_enabled):
+                loss = diffusion.training_loss(model, images, t, conditions) / grad_accum
             if not torch.isfinite(loss):
                 raise FloatingPointError(f"Non-finite training loss at step {step}: {loss.item()}")
-            loss.backward()
+            scaler.scale(loss).backward()
             last_loss = float(loss.item() * grad_accum)
             if (step + 1) % grad_accum == 0:
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 optimizer.zero_grad(set_to_none=True)
                 ema.update(model)
             step += 1
@@ -149,7 +171,19 @@ def train(config: dict[str, Any]) -> TrainResult:
             if save_every > 0 and step % save_every == 0:
                 save_checkpoint(
                     checkpoint_dir / f"checkpoint_step_{step}.pt",
-                    _checkpoint_state(model, ema, optimizer, step, epoch, config, dataset.mappings, diffusion, seed),
+                    _checkpoint_state(
+                        model,
+                        ema,
+                        optimizer,
+                        scaler,
+                        step,
+                        epoch,
+                        config,
+                        dataset.mappings,
+                        diffusion,
+                        seed,
+                        mixed_precision_enabled,
+                    ),
                 )
             if step >= max_steps:
                 break
@@ -158,6 +192,18 @@ def train(config: dict[str, Any]) -> TrainResult:
     final_path = checkpoint_dir / f"checkpoint_step_{step}.pt"
     save_checkpoint(
         final_path,
-        _checkpoint_state(model, ema, optimizer, step, epoch, config, dataset.mappings, diffusion, seed),
+        _checkpoint_state(
+            model,
+            ema,
+            optimizer,
+            scaler,
+            step,
+            epoch,
+            config,
+            dataset.mappings,
+            diffusion,
+            seed,
+            mixed_precision_enabled,
+        ),
     )
     return TrainResult(final_path, step, epoch, last_loss)

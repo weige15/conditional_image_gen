@@ -15,10 +15,13 @@ from conftest import tiny_config
 
 def test_tiny_training_checkpoint_and_generation(tiny_dataset, tmp_path: Path):
     config = tiny_config(tiny_dataset, tmp_path)
+    config["optimizer"]["mixed_precision"] = True
     result = train(config)
     state = load_checkpoint(result.checkpoint_path)
     assert state["step"] == 2
     assert "shadow" in state["ema"]
+    assert "amp_scaler" in state
+    assert state["mixed_precision"] == {"enabled": torch.cuda.is_available()}
     exported = tmp_path / "model.pth"
     export_model_pth(result.checkpoint_path, exported)
     assert load_checkpoint(exported)["step"] == 2
