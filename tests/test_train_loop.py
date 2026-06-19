@@ -50,19 +50,22 @@ def _tiny_train_config(tmp_path: Path) -> dict:
     )
 
 
-def test_tiny_cpu_training_writes_metadata_complete_checkpoint(tmp_path: Path) -> None:
+def test_tiny_cpu_training_writes_metadata_complete_checkpoint(tmp_path: Path, capsys) -> None:
     config = _tiny_train_config(tmp_path)
 
     result = train(config)
+    output = capsys.readouterr().out
     checkpoint = load_checkpoint(result.final_checkpoint)
 
     assert result.final_checkpoint.exists()
     assert result.step == 2
     assert math.isfinite(result.last_loss)
+    assert "training device=" in output
+    assert "step=1/2" in output
+    assert "saved checkpoint:" in output
     assert checkpoint["step"] == 2
     assert checkpoint["config"]["data"]["train_csv"] == config["data"]["train_csv"]
     assert checkpoint["condition_mappings"]["animals"] == ["cat", "dog"]
     assert checkpoint["diffusion"]["timesteps"] == 4
     assert checkpoint["architecture"]["base_channels"] == 4
     assert checkpoint["seed"]["torch"] == config["training"]["seed"]
-

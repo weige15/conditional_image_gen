@@ -23,7 +23,7 @@ diffusion:
   beta_end: 0.02
 
 training:
-  batch_size: 64
+  batch_size: 128
   max_steps: 100000
   learning_rate: 0.0002
   weight_decay: 0.0
@@ -70,4 +70,3 @@ packaging:
   checkpoint: model.pth
   zip_dir: .
   overwrite: false
-

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import time
 from dataclasses import dataclass
 from itertools import cycle
 from pathlib import Path
@@ -86,10 +87,22 @@ def train(config: Mapping[str, object]) -> TrainingResult:
 
     max_steps = int(training_config["max_steps"])
     save_every = int(training_config["save_every"])
+    log_every = int(training_config.get("log_every", 0) or 0)
     checkpoint_dir = Path(str(checkpoint_config["checkpoint_dir"]))
     last_loss = float("nan")
     final_checkpoint: Path | None = None
 
+    print(
+        "training "
+        f"device={device} "
+        f"samples={len(dataset)} "
+        f"batch_size={int(training_config['batch_size'])} "
+        f"steps={start_step + 1}-{max_steps} "
+        f"save_every={save_every} "
+        f"log_every={log_every}",
+        flush=True,
+    )
+    started_at = time.monotonic()
     model.train()
     for step, batch in zip(range(start_step + 1, max_steps + 1), cycle(loader)):
         images = batch["image"].to(device)
@@ -109,6 +122,16 @@ def train(config: Mapping[str, object]) -> TrainingResult:
         ema.update(model)
         last_loss = float(loss.detach().cpu())
 
+        if log_every > 0 and (step == start_step + 1 or step % log_every == 0 or step == max_steps):
+            elapsed = max(time.monotonic() - started_at, 1e-9)
+            trained_steps = step - start_step
+            print(
+                f"step={step}/{max_steps} "
+                f"loss={last_loss:.6f} "
+                f"steps_per_sec={trained_steps / elapsed:.3f}",
+                flush=True,
+            )
+
         if step % save_every == 0 or step == max_steps:
             final_checkpoint = checkpoint_dir / f"checkpoint_step_{step}.pt"
             save_checkpoint(
@@ -124,6 +147,7 @@ def train(config: Mapping[str, object]) -> TrainingResult:
                 optimizer=optimizer.state_dict(),
                 metrics={"loss": last_loss},
             )
+            print(f"saved checkpoint: {final_checkpoint}", flush=True)
 
     if final_checkpoint is None:
         final_checkpoint = checkpoint_dir / f"checkpoint_step_{start_step}.pt"
@@ -201,4 +225,3 @@ def _device(value: str) -> torch.device:
     if value == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return torch.device(value)
-
