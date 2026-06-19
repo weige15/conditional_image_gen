@@ -155,9 +155,15 @@ def _condition_tensors(
 def _check_outputs(requests: Sequence[GenerationRequest], output_dir: Path, overwrite: bool) -> None:
     if overwrite:
         return
+    if output_dir.exists() and not output_dir.is_dir():
+        raise FileExistsError(f"output path exists and is not a directory: {output_dir}")
     existing = [output_dir / request.id for request in requests if (output_dir / request.id).exists()]
     if existing:
         raise FileExistsError(f"output file already exists: {existing[0]}")
+    if output_dir.exists() and output_dir.is_dir():
+        existing_any = next((path for path in output_dir.rglob("*") if path.is_file()), None)
+        if existing_any is not None:
+            raise FileExistsError(f"output directory is not empty: {output_dir}")
 
 
 def _batches(items: Sequence[GenerationRequest], batch_size: int) -> list[Sequence[GenerationRequest]]:

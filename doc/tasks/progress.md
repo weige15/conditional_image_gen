@@ -34,3 +34,4 @@
 - 2026-06-19: Implemented validation, evaluation report/scorer-input prep, and packaging. Verified with `python -m pytest tests/test_validate.py tests/test_evaluate.py tests/test_package.py` (9 passed).
 - 2026-06-19: Implemented CLI wrappers for train, generate, validate, evaluate, scorer-input prep, and packaging. Verified with `python -m pytest tests/test_scripts.py` (2 passed).
 - 2026-06-19: Ran full implementation gates: `python -m pytest` (50 passed) and `python -m compileall src scripts tests` (passed). Lint and format remain unchecked because no repo tooling is configured.
+- 2026-06-20: Replaced the default generator with a deeper `attention_unet` while keeping `compact_unet` checkpoint compatibility. Verified with `python -m pytest tests/test_model.py tests/test_config.py tests/test_checkpoint.py tests/test_train_loop.py tests/test_sample.py` (20 passed).

@@ -23,6 +23,7 @@ REQUIRED_SECTIONS = (
 
 SUPPORTED_SAMPLERS = {"ddpm", "ddim"}
 SUPPORTED_SCHEDULES = {"linear", "cosine"}
+SUPPORTED_MODELS = {"compact_unet", "attention_unet"}
 
 
 def load_config(path: str | Path, overrides: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -85,6 +86,7 @@ def validate_config(config: Mapping[str, Any]) -> None:
     _require_str(data, "generate_csv")
     _require_str(data, "train_image_dir")
     _require_str(model, "name")
+    _require_supported(model, "name", SUPPORTED_MODELS)
     _require_str(checkpointing, "checkpoint_dir")
     _require_str(validation, "output_dir")
     _require_str(evaluation, "reference_dir")
@@ -94,6 +96,14 @@ def validate_config(config: Mapping[str, Any]) -> None:
         raise ValueError("data.image_size must be 64")
     if int(model.get("image_size", 0)) != 64:
         raise ValueError("model.image_size must be 64")
+    _require_positive_int(model, "base_channels")
+    _require_positive_int(model, "embedding_dim")
+    if "channel_multipliers" in model:
+        _require_positive_int_sequence(model, "channel_multipliers", length=3)
+    if "num_res_blocks" in model:
+        _require_positive_int(model, "num_res_blocks")
+    if "attention_resolutions" in model:
+        _require_positive_int_sequence(model, "attention_resolutions", allowed={16, 32, 64})
     _require_positive_int(diffusion, "timesteps")
     _require_supported(diffusion, "schedule", SUPPORTED_SCHEDULES)
     _require_positive_int(training, "batch_size")
@@ -130,6 +140,26 @@ def _require_positive_int(section: Mapping[str, Any], key: str) -> None:
     value = section.get(key)
     if not isinstance(value, int) or value <= 0:
         raise ValueError(f"{key} must be a positive integer")
+
+
+def _require_positive_int_sequence(
+    section: Mapping[str, Any],
+    key: str,
+    *,
+    length: int | None = None,
+    allowed: set[int] | None = None,
+) -> None:
+    value = section.get(key)
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{key} must be a nonempty list of positive integers")
+    if length is not None and len(value) != length:
+        raise ValueError(f"{key} must contain exactly {length} values")
+    if any(not isinstance(item, int) or item <= 0 for item in value):
+        raise ValueError(f"{key} must contain positive integers")
+    if allowed is not None:
+        invalid = sorted(set(value) - allowed)
+        if invalid:
+            raise ValueError(f"{key} contains unsupported values: {invalid}")
 
 
 def _require_supported(section: Mapping[str, Any], key: str, supported: set[str]) -> None:
@@ -188,4 +218,3 @@ def _ensure_serializable(value: Any) -> None:
             _ensure_serializable(item)
         return
     raise ValueError(f"config value is not JSON/YAML serializable: {type(value).__name__}")
-

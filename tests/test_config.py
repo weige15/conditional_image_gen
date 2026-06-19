@@ -33,6 +33,14 @@ def test_invalid_values_fail() -> None:
         validate_config(config)
 
 
+def test_invalid_architecture_values_fail() -> None:
+    config = load_config("configs/default.yaml")
+    config["model"]["attention_resolutions"] = [8]
+
+    with pytest.raises(ValueError, match="attention_resolutions"):
+        validate_config(config)
+
+
 def test_dotted_overrides_are_deterministic() -> None:
     config = load_config("configs/default.yaml")
     updated = apply_overrides(
@@ -57,4 +65,3 @@ def test_nested_overrides_keep_other_values() -> None:
 
     assert updated["training"]["batch_size"] == 8
     assert updated["training"]["learning_rate"] == original["learning_rate"]
-

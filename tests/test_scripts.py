@@ -9,6 +9,7 @@ import yaml
 from PIL import Image
 
 from brainrot_diffusion.config import apply_overrides, load_config
+from scripts.generate import parse_args as parse_generate_args
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -163,6 +164,14 @@ def test_script_tiny_train_generate_validate_evaluate_prepare_and_package(tmp_pa
     assert (tmp_path / "HW6_A12345678.zip").exists()
 
 
+def test_generate_parser_preserves_config_overwrite_default() -> None:
+    default_args = parse_generate_args(["--checkpoint", "checkpoint.pt"])
+    overwrite_args = parse_generate_args(["--checkpoint", "checkpoint.pt", "--overwrite"])
+
+    assert default_args.overwrite is None
+    assert overwrite_args.overwrite is True
+
+
 def test_validate_script_returns_nonzero_for_invalid_output(tmp_path: Path) -> None:
     generate_csv = tmp_path / "generate.csv"
     generate_csv.write_text(
@@ -182,4 +191,3 @@ def test_validate_script_returns_nonzero_for_invalid_output(tmp_path: Path) -> N
 
     assert result.returncode == 1
     assert "validation failed" in result.stderr
-

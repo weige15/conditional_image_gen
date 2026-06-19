@@ -74,3 +74,26 @@ def test_prepare_score_input_validates_and_copies_layout(tmp_path: Path) -> None
             overwrite=False,
         )
 
+
+def test_prepare_score_input_preflights_reference_files_before_overwrite(tmp_path: Path) -> None:
+    csv_path = _generate_csv(tmp_path / "generate.csv")
+    output = _valid_outputs(tmp_path / "generated")
+    ref = tmp_path / "ref"
+    ref.mkdir()
+    np.save(ref / "test_mu.npy", np.zeros(2))
+    score_input = tmp_path / "score_input"
+    score_input.mkdir()
+    sentinel = score_input / "keep.txt"
+    sentinel.write_text("do not delete", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError, match="missing scorer reference"):
+        prepare_score_input(
+            generate_csv=csv_path,
+            generated_images=output,
+            score_input_dir=score_input,
+            test_mu=ref / "test_mu.npy",
+            test_sigma=ref / "missing_sigma.npy",
+            overwrite=True,
+        )
+
+    assert sentinel.exists()

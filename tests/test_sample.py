@@ -96,6 +96,16 @@ def test_generate_refuses_existing_output_without_overwrite(tmp_path: Path) -> N
         generate_from_checkpoint(checkpoint_path, config=config, output_dir=out_dir, overwrite=False)
 
 
+def test_generate_refuses_nonempty_output_directory_without_overwrite(tmp_path: Path) -> None:
+    checkpoint_path, config, _ = _tiny_checkpoint(tmp_path)
+    out_dir = tmp_path / "generated"
+    out_dir.mkdir()
+    (out_dir / "notes.txt").write_text("leftover", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="not empty"):
+        generate_from_checkpoint(checkpoint_path, config=config, output_dir=out_dir, overwrite=False)
+
+
 def test_unknown_labels_fail_before_output_directory_is_created(tmp_path: Path) -> None:
     checkpoint_path, config, _ = _tiny_checkpoint(tmp_path)
     bad_csv = tmp_path / "bad_generate.csv"
@@ -109,4 +119,3 @@ def test_unknown_labels_fail_before_output_directory_is_created(tmp_path: Path) 
         generate_from_checkpoint(checkpoint_path, config=config, generate_csv=bad_csv, output_dir=out_dir)
 
     assert not out_dir.exists()
-

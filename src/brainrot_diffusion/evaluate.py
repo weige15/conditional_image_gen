@@ -63,6 +63,16 @@ def prepare_score_input(
     validation = validate_submission(generate_csv, generated_images)
     if not validation.passed:
         raise ValueError("generated images are invalid; refusing to prepare scorer input")
+    test_mu_path = Path(test_mu)
+    test_sigma_path = Path(test_sigma)
+    config_json_path = Path(config_json) if config_json is not None else None
+    missing = [
+        str(path)
+        for path in (test_mu_path, test_sigma_path, config_json_path)
+        if path is not None and not path.is_file()
+    ]
+    if missing:
+        raise FileNotFoundError("missing scorer reference file(s): " + ", ".join(missing))
     root = Path(score_input_dir)
     if root.exists():
         if not overwrite:
@@ -73,10 +83,10 @@ def prepare_score_input(
     ref_dir.mkdir(parents=True)
     res_dir.mkdir(parents=True)
 
-    shutil.copy2(test_mu, ref_dir / "test_mu.npy")
-    shutil.copy2(test_sigma, ref_dir / "test_sigma.npy")
-    if config_json is not None:
-        shutil.copy2(config_json, ref_dir / "config.json")
+    shutil.copy2(test_mu_path, ref_dir / "test_mu.npy")
+    shutil.copy2(test_sigma_path, ref_dir / "test_sigma.npy")
+    if config_json_path is not None:
+        shutil.copy2(config_json_path, ref_dir / "config.json")
     else:
         (ref_dir / "config.json").write_text(
             json.dumps(
@@ -105,4 +115,3 @@ def prepare_score_input(
 def validation_failed(report: Mapping[str, object]) -> bool:
     validation = report.get("validation")
     return isinstance(validation, Mapping) and validation.get("passed") is False
-
