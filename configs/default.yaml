@@ -23,11 +23,11 @@ diffusion:
   beta_end: 0.02
 
 training:
-  batch_size: 128
+  batch_size: 256
   max_steps: 100000
   learning_rate: 0.0002
   weight_decay: 0.0
-  num_workers: 4
+  num_workers: 16
   seed: 1337
   save_every: 1000
   log_every: 50
