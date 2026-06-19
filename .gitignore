@@ -6,3 +6,10 @@ scoring_program/metadata
 scripts/__pycache__/
 src/brainrot_diffusion/__pycache__/
 tests/__pycache__/
+HW6_314511048.zip
+Untitled1.ipynb
+checkpoints/
+generated_images/
+reports/
+score_input/
+score_output/
