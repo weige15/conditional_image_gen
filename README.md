@@ -29,7 +29,7 @@ python scripts/train.py \
   --mixed-precision
 ```
 
-`optimizer.mixed_precision` is enabled by default and only activates on CUDA. Use `--no-mixed-precision` to force full precision.
+`training.mixed_precision` is kept in the config for future GPU tuning; the current training loop runs the same CPU-friendly full-precision path unless extended.
 
 Checkpoints contain raw model weights, EMA state, optimizer state, config, diffusion metadata, architecture metadata, seed metadata, progress counters, and stable condition mappings.
 
@@ -69,7 +69,7 @@ python scripts/evaluate.py \
   --report-path reports/evaluation.json
 ```
 
-Structural validation always runs first. Local FID runs when reference stats and torchvision dependencies are available. CLIP-T is reported as skipped unless a local proxy is explicitly enabled; the official CLIP-T score comes from Codabench.
+Structural validation always runs first. FID and CLIP-T are reported as explicit skips in this wrapper; use `prepare_score_input.py` and the provided course scorer, or Codabench, for metric calculation.
 
 ## Course Scorer Input
 

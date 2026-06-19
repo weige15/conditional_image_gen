@@ -1,39 +1,79 @@
 # Detailed Design
 
 ## Purpose
-Design the implementation for the HW6 Brainrot Image Generation assignment described in `Brainrot_Image_Gen.pdf`, using `doc/proposal.md` as the source proposal. The solution is a from-scratch conditional DDPM/DDIM image generator that trains on the provided Brainrot Dataset and produces exactly 2,000 RGB PNG images at 64x64 resolution from `dataset/generate.csv`.
+
+This document turns `doc/proposal.md`, `doc/high-level-design.md`, and `doc/test-plan.md` into an implementation-ready design for HW6 Brainrot Image Generation. It preserves the HLD module boundaries and describes responsibilities, contracts, algorithms, failure handling, and independently testable work packages without writing production code.
+
+The design target is a reproducible Python/PyTorch project that trains a from-scratch conditional image generator and produces exactly 2,000 RGB `64x64` PNG files named according to `dataset/generate.csv`.
 
 ## Source Proposal Summary
-The proposal selects a pixel-space conditional diffusion model as the primary algorithm. The model uses a compact residual UNet trained with epsilon-prediction MSE, learned animal/object/pair condition embeddings, condition dropout for classifier-free guidance, EMA weights for sampling, and DDIM sampling for final generation.
 
-The repository currently contains the assignment PDF, research notes, dataset files, reference FID statistics, and the Codabench scorer. The implementation files described by `README.md` are not yet present, so this design treats the codebase as a greenfield Python/PyTorch project inside the existing assignment bundle.
+The proposal selects a pixel-space conditional diffusion baseline implemented directly in PyTorch. The main generator must be trained from scratch and must not use pretrained generative weights, Diffusers pipelines, or high-level generation/training flows. The first implementation is scoped to the provided Brainrot Dataset, with optional pretrained CLIP or VAE use deferred until explicitly approved.
+
+The proposed package layout is `src/brainrot_diffusion/` plus thin scripts under `scripts/`. The implementation must cover data loading, stable condition mappings, a from-scratch conditional generator, diffusion training and sampling, checkpoint metadata, structural validation, optional local FID/evaluator hooks, and packaging.
+
+## HLD Summary
+
+The HLD defines these modules and module groups:
+
+- Configuration: `src/brainrot_diffusion/config.py`
+- Data Loading: `src/brainrot_diffusion/data.py`
+- Conditions: `src/brainrot_diffusion/conditions.py`
+- Generator Model: `src/brainrot_diffusion/model.py`
+- Diffusion: `src/brainrot_diffusion/diffusion.py`
+- EMA: `src/brainrot_diffusion/ema.py`
+- Checkpointing: `src/brainrot_diffusion/checkpoint.py`
+- Training Loop: `src/brainrot_diffusion/train_loop.py`
+- Sampling: `src/brainrot_diffusion/sample.py`
+- Validation: `src/brainrot_diffusion/validate.py`
+- Evaluation: `src/brainrot_diffusion/evaluate.py`
+- Packaging: `src/brainrot_diffusion/package.py`
+- CLI Scripts: `scripts/*.py`
+- Tests: `tests/`
+
+The primary flow is:
+
+```text
+dataset/train.csv + dataset/trainset/
+  -> data + conditions
+  -> train_loop(config, model, diffusion, checkpoint, ema)
+  -> checkpoints/*.pt
+  -> sample(checkpoint, dataset/generate.csv)
+  -> generated_images/
+  -> validate/evaluate
+  -> package
+```
 
 ## Design Goals
-- Train the main generator from scratch without pretrained generative weights.
-- Avoid Diffusers pipelines and high-level generation/training flows.
-- Produce valid submission output: exactly 2,000 RGB PNG files, 64x64, named according to `dataset/generate.csv`.
-- Keep model, diffusion, training, sampling, validation, and packaging modules independently testable.
-- Save enough metadata for reproducible training and generation.
-- Optimize for assignment metrics: lower FID and higher CLIP-T.
+
+- Keep the main generator from-scratch and assignment-compliant.
+- Preserve stable condition mappings between training, checkpointing, and generation.
+- Make final output validation strict: exact count, filenames, RGB mode, PNG format, and `64x64` size.
+- Keep scripts as thin wrappers over package modules.
+- Save enough checkpoint metadata for reproducible TA generation.
+- Keep tests small, CPU-friendly, and tied to module contracts.
+- Treat scorer and metric execution as optional evaluation work, not a core unit-test dependency.
 
 ## Non-Goals
-- Do not implement Stable Diffusion, FLUX, pretrained GANs, ControlNet, LoRA, DreamBooth, or other pretrained generation paths.
-- Do not use external generated images in the first implementation.
-- Do not make a pretrained CLIP or VAE the main generator.
-- Do not implement the optional StyleGAN2-ADA fallback in the first detailed design. It remains a future experiment.
-- Do not depend on hidden Codabench test images or hidden CLIP-T metadata for local correctness.
+
+- No pretrained generative model, Diffusers pipeline, pretrained GAN, pretrained Transformer generator, Stable Diffusion, or equivalent high-level generation flow.
+- No extra training data in the first implementation path.
+- No auxiliary pretrained CLIP or VAE in final-image generation.
+- No leaderboard tuning before the train/generate/validate/package path is valid.
+- No hidden Codabench data assumptions.
+- No broad tooling additions such as lint/type-check dependencies until explicitly chosen.
 
 ## Architecture Overview
-The project will be organized around a small Python package plus command-line scripts:
+
+The project remains a small Python package with command-line adapters:
 
 ```text
 src/brainrot_diffusion/
   config.py
   data.py
   conditions.py
-  unet.py
+  model.py
   diffusion.py
-  guidance.py
   ema.py
   checkpoint.py
   train_loop.py
@@ -47,8 +87,8 @@ scripts/
   generate.py
   validate_submission.py
   evaluate.py
-  package_submission.py
   prepare_score_input.py
+  package_submission.py
 
 configs/
   default.yaml
@@ -56,715 +96,1259 @@ configs/
 tests/
 ```
 
-The package owns reusable logic. Scripts are thin CLI adapters that parse paths and config, call package functions, and return clear exit codes.
+Classifier-free guidance is not a separate HLD module. Its training-time condition dropout belongs in Training Loop/Conditions, its null-condition model support belongs in Generator Model/Conditions, and its prediction-combination behavior belongs in Sampling/Diffusion.
 
-Primary workflow:
+## Shared Data Contracts
 
-1. `scripts/train.py` loads config, dataset, condition mappings, UNet, diffusion scheduler, optimizer, and EMA.
-2. The training loop samples timesteps and noise, computes DDPM epsilon-prediction loss, updates model and EMA, and writes checkpoints.
-3. `scripts/generate.py` loads a checkpoint, uses EMA weights by default, reads `dataset/generate.csv`, samples images with DDIM and classifier-free guidance, and writes `generated_images/{id}`.
-4. `scripts/validate_submission.py` checks output shape, mode, count, filenames, and PNG validity.
-5. `scripts/evaluate.py` runs structural validation and local FID when reference stats are available.
-6. `scripts/package_submission.py` packages required files for E3 submission.
+CSV contracts:
+
+- Training CSV columns: `id`, `animal`, `object`.
+- Generation CSV columns: `id`, `animal`, `object`, `prompt`.
+- Duplicate IDs are invalid.
+- Generation prompts are expected to follow `a {animal} and a {object}`; mismatch is at least a validation warning and may be an error if implementation chooses strict prompt validation.
+
+Image contracts:
+
+- Training images are loaded from `dataset/trainset/{id}`.
+- Training tensors use shape `[B, 3, 64, 64]`, dtype `float32`, and normalized range `[-1, 1]`.
+- Generated tensors are clamped/converted to RGB PNG files.
+- Final output files must be PNG format, RGB mode, and `64x64`.
+
+Condition contracts:
+
+- Animal, object, and pair mappings are stable, serializable, and checkpointed.
+- Generation uses checkpoint mappings, not rebuilt mappings from `dataset/generate.csv`.
+- Unknown generation labels relative to checkpoint mappings are invalid.
+- Null/unconditional conditions for classifier-free guidance must be represented in checkpoint-compatible metadata if used.
+
+Checkpoint contract:
+
+- Required metadata: model state, config, condition mappings, diffusion metadata, architecture metadata, seed metadata, and step/progress counters.
+- Optional metadata: optimizer state and EMA state.
+- Missing required keys make generation fail before sampling.
+
+Report contracts:
+
+- Validation and evaluation reports are JSON-compatible dictionaries when written.
+- Metric skips must be explicit, not silent success.
+- Commands discovered but not run remain labeled `Known, not run`.
 
 ## Module Designs
 
-### Data and Labels
+### Configuration
 
 #### Responsibility
-Own reading CSV files, loading images, converting animal/object labels into stable ids, and returning tensors and condition ids for training and generation. It does not own model architecture, diffusion math, sampling, checkpoint persistence, or evaluation.
+
+Load, merge, and validate runtime configuration for paths, model settings, diffusion settings, training settings, sampling settings, validation/report paths, and packaging settings.
+
+#### Non-Responsibility
+
+Configuration does not load datasets, construct models, run training, run sampling, write checkpoints, or decide final experiment quality.
 
 #### Inputs and Outputs
+
 Inputs:
 
-- `dataset/train.csv` with columns `id,animal,object`.
-- `dataset/generate.csv` with columns `id,animal,object,prompt`.
-- `dataset/trainset/{id}` PNG images.
-- Config values for image size, transform behavior, and optional augmentation.
+- YAML config path, expected default `configs/default.yaml`.
+- CLI overrides from scripts.
+- Repository-relative default paths.
 
 Outputs:
 
-- Training samples: image tensor `[3, 64, 64]` normalized to `[-1, 1]`, `animal_id`, `object_id`, `pair_id`, and source filename.
-- Generation requests: output filename, animal/object labels, prompt, and mapped condition ids.
-- Stable condition mappings saved to checkpoints and reused for generation.
+- One resolved config mapping or object used by package modules.
+- Validation errors for missing or invalid keys.
+
+#### Public Interface
+
+Expose a small package-level loading/validation API used by scripts and tests. Exact function/class names may be finalized during implementation, but the interface must support: load config file, apply overrides, validate required sections, and serialize config into checkpoint metadata.
+
+#### Data Structures
+
+The resolved config should be JSON/YAML-serializable. It must include sections for data paths, model shape, diffusion schedule, training loop, sampling, checkpointing, validation/evaluation, and packaging.
 
 #### Internal Design
-`conditions.py` defines the canonical animal and object vocabularies from observed CSV labels. It creates deterministic mappings by sorting labels or by preserving a saved mapping from checkpoint metadata. `pair_id` is derived from `(animal_id, object_id)` and supports all 100 possible combinations.
 
-`data.py` defines:
+Use PyYAML for parsing and standard library path handling. Keep defaults in config files rather than scattering path constants through modules. Validate before expensive work such as model allocation or dataloader creation.
 
-- `BrainrotTrainDataset`
-- `GenerationRequestDataset`
-- `build_condition_mappings`
-- `load_generation_requests`
+#### Algorithm Details
 
-Image handling:
-
-- Open images with PIL and convert to RGB.
-- Resize or center-crop defensively to 64x64 if image dimensions differ.
-- Convert to tensor and normalize to `[-1, 1]`.
-- Random horizontal flip is controlled by config and disabled by default until visual inspection confirms it is harmless.
+1. Read YAML.
+2. Normalize paths relative to repository root or current working directory according to script policy.
+3. Apply CLI overrides.
+4. Validate required sections and simple ranges.
+5. Return resolved config.
 
 #### Dependencies
-- Python CSV or pandas-like parsing. Prefer Python stdlib `csv` unless tabular operations become complex.
-- PIL for image loading.
-- PyTorch and torchvision transforms for tensor conversion.
+
+- PyYAML.
+- Python standard library path/type handling.
 
 #### Failure Handling
-- Missing CSV columns raise a clear `ValueError`.
-- Missing image files raise `FileNotFoundError` with the image id.
-- Unknown generation label not present in saved mappings raises `ValueError`.
-- Invalid image mode or unreadable image raises a filename-specific error.
-- Duplicate ids in `generate.csv` are rejected.
+
+- Missing config file: `FileNotFoundError`.
+- Malformed YAML: parser error with path.
+- Missing required key or invalid range: `ValueError` before work starts.
 
 #### Independent Test Plan
-- Build a tiny temporary dataset with two PNG files and a small CSV.
-- Verify image tensors have shape `[3, 64, 64]` and range approximately `[-1, 1]`.
-- Verify stable mappings are deterministic across repeated loads.
-- Verify `pair_id` is stable and unique for animal/object pairs.
-- Verify missing columns, missing files, duplicate ids, and unknown labels fail cleanly.
+
+- Load a minimal valid config fixture.
+- Reject missing required sections.
+- Reject invalid numeric ranges such as nonpositive timesteps or image size other than `64`.
+- Confirm CLI overrides produce deterministic resolved values.
+- Confirm resolved config can be stored in checkpoint metadata.
 
 #### Open Questions
-- None for the initial design.
 
-### Conditional UNet
+- Exact config key names are not fixed by the planning docs and should be chosen once implementation starts.
+
+### Data Loading
 
 #### Responsibility
-Own the neural network that predicts diffusion noise from a noisy image, timestep, and condition ids. It does not own diffusion schedule construction, loss sampling, optimizer updates, checkpoint IO, or image file writing.
+
+Read training rows, generation requests, and RGB image files. Produce validated sample/request records and tensors for downstream modules.
+
+#### Non-Responsibility
+
+Data Loading does not own condition vocabulary persistence, model code, diffusion math, training lifecycle, sampling, final validation reports, or packaging.
 
 #### Inputs and Outputs
+
 Inputs:
 
-- `x_t`: float tensor `[B, 3, 64, 64]`.
-- `t`: integer tensor `[B]`.
-- Condition ids: `animal_id`, `object_id`, `pair_id`, each `[B]`.
-- Optional condition-dropout mask or null-condition ids for classifier-free guidance.
+- `dataset/train.csv`.
+- `dataset/generate.csv`.
+- `dataset/trainset/`.
+- Image-size and transform settings from config.
+
+Outputs:
+
+- Parsed training rows with `id`, `animal`, and `object`.
+- Parsed generation requests with `id`, `animal`, `object`, and `prompt`.
+- Training image tensors shaped `[3, 64, 64]` in `[-1, 1]`.
+- Batch-ready records that can be combined with condition IDs.
+
+#### Public Interface
+
+Expose dataset/loader behavior for training rows and generation requests. Scripts and tests must be able to load CSV rows without constructing a model.
+
+#### Data Structures
+
+- Training row: filename/id plus animal/object strings.
+- Generation request: output filename/id plus animal/object strings and prompt.
+- Training sample: image tensor plus row metadata and condition-compatible labels.
+
+#### Internal Design
+
+Use Python `csv.DictReader` for simple CSV parsing. Use Pillow to open images and convert them to RGB. Use PyTorch tensor conversion directly or torchvision transforms if already available. Keep any augmentation minimal and config-driven.
+
+#### Algorithm Details
+
+CSV parsing:
+
+1. Read header.
+2. Verify required columns.
+3. Reject duplicate IDs.
+4. Return ordered rows.
+
+Image loading:
+
+1. Resolve `trainset/{id}`.
+2. Open with Pillow.
+3. Convert to RGB.
+4. Ensure or transform to `64x64` according to config.
+5. Convert to tensor and normalize to `[-1, 1]`.
+
+#### Dependencies
+
+- Python standard library `csv` and paths.
+- Pillow.
+- PyTorch.
+- Conditions module only for applying existing mappings when batch records need IDs.
+
+#### Failure Handling
+
+- Missing CSV column: `ValueError`.
+- Duplicate ID: `ValueError`.
+- Missing image file: `FileNotFoundError`.
+- Unreadable image: filename-specific error.
+- Unexpected generation prompt: warning or error, to be finalized.
+
+#### Independent Test Plan
+
+- Parse tiny train/generate CSV fixtures.
+- Reject missing columns and duplicate IDs.
+- Load tiny RGB images and assert tensor shape/range.
+- Fail on missing image file.
+- Confirm generation request ordering follows CSV ordering.
+
+#### Open Questions
+
+- Whether prompt mismatch is a hard error or warning is not fixed by source docs.
+
+### Conditions
+
+#### Responsibility
+
+Create, serialize, deserialize, and apply stable animal, object, and animal-object pair mappings.
+
+#### Non-Responsibility
+
+Conditions does not load image pixels, train models, save checkpoints, or write generated PNGs.
+
+#### Inputs and Outputs
+
+Inputs:
+
+- Labels from training CSV.
+- Saved checkpoint mappings.
+- Generation labels to look up.
+
+Outputs:
+
+- Animal IDs, object IDs, pair IDs.
+- JSON-compatible mapping metadata.
+- Null-condition metadata when classifier-free guidance is enabled.
+
+#### Public Interface
+
+Expose mapping construction from training labels, mapping restoration from checkpoint metadata, label-to-ID lookup, and compatibility validation for generation requests.
+
+#### Data Structures
+
+- `animal_to_id`, `object_to_id`, `pair_to_id`.
+- Reverse lookup lists or dictionaries for metadata.
+- Optional null IDs for unconditional guidance.
+
+#### Internal Design
+
+Use deterministic mapping creation, preferably sorted unique labels unless an explicit saved mapping is provided. Pair IDs should be deterministic for `(animal, object)` and stable across process runs.
+
+#### Algorithm Details
+
+1. Extract unique animals and objects from training rows.
+2. Build stable animal/object IDs.
+3. Build pair IDs for observed or configured pairs.
+4. Serialize mappings into checkpoint metadata.
+5. During generation, validate every requested label against restored mappings before sampling.
+
+#### Dependencies
+
+- Python standard library data structures.
+
+#### Failure Handling
+
+- Unknown label at generation time: `ValueError`.
+- Missing mapping in checkpoint: `ValueError`.
+- Duplicate or inconsistent reverse mappings: `ValueError`.
+
+#### Independent Test Plan
+
+- Build mappings from tiny CSV rows.
+- Confirm stable mapping across row permutations.
+- Confirm serialization round trip preserves IDs exactly.
+- Reject unknown generation labels.
+- Verify pair IDs are stable and unique for tested pairs.
+
+#### Open Questions
+
+- Whether pair IDs cover all 100 possible animal-object pairs or only observed training pairs should be finalized during implementation. Generation must fail clearly for any unsupported pair.
+
+### Generator Model
+
+#### Responsibility
+
+Define the from-scratch conditional image generator backbone that predicts diffusion noise from noisy image tensors, timesteps, and condition IDs.
+
+#### Non-Responsibility
+
+Generator Model does not own CSV parsing, condition mapping construction, diffusion schedule math, optimizer steps, checkpoint schema, sampling loop, or image file writing.
+
+#### Inputs and Outputs
+
+Inputs:
+
+- Noisy image tensor `[B, 3, 64, 64]`.
+- Timestep tensor `[B]`.
+- Condition IDs for animal, object, and pair.
+- Optional null/unconditional condition IDs.
 
 Output:
 
 - Predicted noise tensor `[B, 3, 64, 64]`.
 
+#### Public Interface
+
+Expose a PyTorch `nn.Module` compatible with the model-forward contract:
+
+```text
+model(x_t, timesteps, conditions) -> predicted_noise
+```
+
+Exact class name is an implementation detail, but checkpoint metadata must record enough architecture config to rebuild it.
+
+#### Data Structures
+
+- Trainable PyTorch parameters initialized from scratch.
+- Learned timestep and condition embeddings.
+- Architecture metadata in checkpoint config.
+
 #### Internal Design
-The UNet follows the proposal:
 
-- Resolution path: `64 -> 32 -> 16 -> 8 -> 16 -> 32 -> 64`.
-- Base channels: configurable, default candidate 96 or 128.
-- Residual blocks: 2 per resolution by default.
-- Normalization and activation: GroupNorm and SiLU.
-- Attention: self-attention at 16x16, with optional 8x8 attention controlled by config.
-- Timestep embedding: sinusoidal embedding followed by an MLP.
-- Condition embeddings: learned animal, object, pair, and null embeddings.
-- Conditioning injection: combine time and condition embeddings and inject into residual blocks through FiLM-style scale/shift when implemented, or additive embedding projection as the simpler fallback.
+Use a compact UNet-style pixel-space backbone as proposed. Keep image size fixed at `64x64` for the assignment. Use PyTorch modules directly. If classifier-free guidance is enabled, support null/unconditional condition IDs through learned embeddings or an equivalent checkpointed convention.
 
-The initial output head predicts epsilon only. v-prediction and learned variance are not part of the initial model contract.
+#### Algorithm Details
+
+Baseline forward path:
+
+1. Embed timestep.
+2. Embed animal/object/pair conditions.
+3. Combine time and condition embeddings.
+4. Process noisy image through downsample/upsample residual blocks.
+5. Return epsilon/noise prediction.
+
+The initial objective is epsilon prediction only. v-prediction and learned variance are not required by the source docs.
 
 #### Dependencies
-- PyTorch `nn.Module`.
-- Condition mappings for embedding table sizes.
-- Config values for channels, blocks, attention resolutions, dropout, and embedding dimension.
+
+- PyTorch.
+- Conditions metadata for embedding sizes.
+- Config for architecture settings.
 
 #### Failure Handling
-- Validate tensor ranks and channel count in debug mode.
-- Reject condition ids outside embedding-table ranges.
-- Config validation prevents invalid attention resolutions or unsupported image sizes.
+
+- Invalid tensor rank/channel count should fail clearly in debug validation or through PyTorch shape errors.
+- Out-of-range condition IDs must fail before embedding lookup where practical.
+- Config validation rejects unsupported image size or invalid architecture settings.
 
 #### Independent Test Plan
-- Instantiate the model with tiny channel counts for CPU tests.
-- Pass random tensors through the model and assert output shape equals input image shape.
-- Test unconditional/null condition path.
-- Test mixed batch condition ids and timestep ids.
-- Count parameters for the default config and record the value for reproducibility.
+
+- Instantiate a tiny model on CPU.
+- Forward random tensors and assert output shape equals input image shape.
+- Test batch size 1 and mixed batch sizes.
+- Test null/unconditional condition path if classifier-free guidance is enabled.
+- Confirm default construction does not load pretrained weights.
 
 #### Open Questions
-- The final base channel width is a training-performance decision. The design keeps it configurable with 96 and 128 as supported defaults.
 
-### Diffusion Objective
+- Final channel width, block count, attention placement, and conditioning injection details are training-quality choices and should remain config-driven.
+
+### Diffusion
 
 #### Responsibility
-Own beta/alpha schedules, timestep sampling, noising equation, training loss, and reverse-step math shared by DDPM and DDIM. It does not own the UNet internals, optimizer, image dataset, or CLI parsing.
+
+Own diffusion schedule construction, forward noising, training objective math, and reverse-step equations shared by samplers.
+
+#### Non-Responsibility
+
+Diffusion does not own model architecture internals, optimizer updates, data loading, checkpoint writing, or final PNG saving.
 
 #### Inputs and Outputs
+
 Inputs:
 
 - Clean image tensor `x_0` in `[-1, 1]`.
-- Timestep tensor `t`.
-- Gaussian noise tensor `epsilon`.
-- Model-predicted noise tensor.
+- Timesteps.
+- Gaussian noise.
+- Model predictions.
+- Diffusion/sampler config.
 
 Outputs:
 
-- Noisy image `x_t`.
-- Training loss scalar and optional logging metrics.
-- Reverse-process coefficients used by samplers.
+- Noisy image tensor `x_t`.
+- Scalar training loss and optional metrics.
+- Reverse-step outputs for sampling.
+- Diffusion metadata for checkpoints.
+
+#### Public Interface
+
+Expose schedule construction, noising, loss computation, and DDPM/DDIM-compatible reverse-step behavior. Exact function/class names may be finalized during implementation, but Training Loop and Sampling must use the same schedule metadata.
+
+#### Data Structures
+
+- Beta/alpha schedule tensors.
+- Cumulative alpha tensors and derived coefficients.
+- Diffusion metadata: schedule type, timesteps, prediction target, sampler settings used for generation.
 
 #### Internal Design
-`diffusion.py` defines a `GaussianDiffusion` object with:
 
-- `num_timesteps = 1000` by default.
-- Cosine beta schedule by default.
-- Precomputed buffers for betas, alphas, cumulative alphas, square roots, posterior coefficients, and DDIM step schedules.
-- `q_sample(x_0, t, noise)`.
-- `training_loss(model, x_0, t, condition)`.
-- `predict_x0_from_eps(x_t, t, eps)`.
-- `p_sample_ddpm(...)`.
-- `ddim_step(...)`.
+Implement DDPM epsilon-prediction loss directly in PyTorch. Use a fixed default timestep count of 1,000 unless config overrides it. DDIM sampling uses the trained DDPM schedule for faster final generation.
 
-Training loss:
+#### Algorithm Details
+
+Training objective:
 
 ```text
-noise = normal_like(x_0)
+noise = randn_like(x_0)
 x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1 - alpha_bar_t) * noise
-pred = model(x_t, t, condition)
+pred = model(x_t, t, conditions)
 loss = mse(pred, noise)
 ```
 
+Reverse sampling equations should be deterministic under fixed seed and sampler settings as far as PyTorch/device behavior permits.
+
 #### Dependencies
-- PyTorch tensor operations.
-- Conditional UNet interface.
-- Config for schedule type and timestep count.
+
+- PyTorch.
+- Generator Model forward contract.
+- Config.
 
 #### Failure Handling
-- Config validation rejects nonpositive timesteps.
-- Schedule construction checks beta values are finite and within valid range.
-- Tensor-device mismatch errors are prevented by registering schedule arrays as module buffers or moving them explicitly to the batch device.
+
+- Reject nonpositive timestep counts.
+- Reject invalid schedule values.
+- Reject unsupported sampler/schedule names.
+- Prevent device mismatch by moving schedule tensors to the active batch/model device.
 
 #### Independent Test Plan
-- Verify schedule tensors have length 1,000 and finite values.
-- Verify `q_sample(x_0, t=0)` is close to `x_0` under the schedule's first alpha value.
-- Verify noising and denoising helper output shapes.
-- Verify loss returns a scalar for a fake model.
-- Verify deterministic behavior with fixed seeds for fixed inputs.
+
+- Verify schedule tensors are finite and expected length.
+- Verify noising output shape matches input.
+- Verify loss is scalar and finite for a fake or tiny model.
+- Verify deterministic noising with fixed seed and fixed inputs.
+- Verify invalid timestep/sampler config fails.
 
 #### Open Questions
-- None for the initial epsilon-prediction design.
 
-### Classifier-Free Guidance
+- Exact beta schedule default is not fixed by source docs; cosine or linear are both valid. The proposal leans toward standard DDPM/DDIM behavior, with final default to be chosen in config.
+
+### EMA
 
 #### Responsibility
-Own condition dropout during training and conditional/unconditional prediction combination during sampling. It does not own condition vocabulary construction or the sampler loop.
+
+Maintain exponential moving average model weights for sampling and checkpoint persistence.
+
+#### Non-Responsibility
+
+EMA does not construct models, compute losses, run optimizer steps, decide checkpoint schema, or run sampling.
 
 #### Inputs and Outputs
+
 Inputs:
 
-- Condition ids for animal, object, and pair.
-- Condition dropout probability, default 0.10.
-- Conditional and unconditional model predictions during sampling.
-- Guidance scale, configured at generation time.
+- Current model parameters.
+- Decay setting.
+- Existing EMA state when resuming.
 
 Outputs:
 
-- Possibly dropped condition ids for training.
-- Guided epsilon prediction during sampling.
+- EMA shadow weights.
+- EMA state for checkpoints.
+- A way for Sampling to evaluate with averaged weights.
+
+#### Public Interface
+
+Expose EMA initialization, update-after-step behavior, state serialization/restoration, and temporary/copy application to a model for sampling.
+
+#### Data Structures
+
+- Shadow parameter mapping keyed consistently with model state dict.
+- Decay metadata.
 
 #### Internal Design
-`guidance.py` provides:
 
-- `drop_conditions(condition_batch, p, generator=None)`.
-- `make_null_condition_batch(batch_size, mappings, device)`.
-- `combine_cfg(eps_uncond, eps_cond, guidance_scale)`.
+Keep EMA independent of optimizer internals. Update only trainable floating-point model parameters after optimizer steps. Disabled EMA should be a no-op path that does not complicate Training Loop tests.
 
-Null condition support is implemented with dedicated null embedding ids in the UNet or a separate learned null embedding branch. The checkpoint records which convention is used so generation is compatible with training.
+#### Algorithm Details
 
-#### Dependencies
-- Condition mapping metadata.
-- Conditional UNet supports null/unconditional inputs.
-- Sampling code calls conditional and unconditional forward passes.
-
-#### Failure Handling
-- Reject guidance scale below 0.
-- Reject condition dropout probability outside `[0, 1]`.
-- Ensure unconditional batch shape matches conditional batch shape before combining predictions.
-
-#### Independent Test Plan
-- Verify `p=0` leaves all conditions unchanged.
-- Verify `p=1` converts all conditions to null ids.
-- Verify guided prediction matches conditional prediction when guidance scale is 1 and formula inputs are consistent.
-- Verify shape mismatch raises an error.
-
-#### Open Questions
-- None for the initial design.
-
-### EMA and Checkpointing
-
-#### Responsibility
-Own moving-average model weights and persistent training/generation state. It does not own model architecture code, training-step computation, or sampling decisions.
-
-#### Inputs and Outputs
-Inputs:
-
-- Model state dict.
-- Optimizer state dict.
-- EMA state dict.
-- Config and metadata.
-- Current step and epoch counters.
-
-Outputs:
-
-- Checkpoint files under a configured checkpoint directory.
-- A final `model.pth` for packaging.
-- Loaded model, EMA state, condition mappings, diffusion metadata, and config.
-
-#### Internal Design
-`ema.py` defines an `EMA` helper:
-
-- Tracks shadow parameters.
-- Updates after optimizer steps.
-- Can copy EMA weights into a model for sampling.
-- Stores decay value in checkpoint metadata.
-
-`checkpoint.py` defines:
-
-- `save_checkpoint(path, state)`.
-- `load_checkpoint(path, map_location)`.
-- `export_model_pth(checkpoint_path, output_path)`.
-
-Checkpoint schema:
+For each tracked parameter:
 
 ```text
-{
-  "model": state_dict,
-  "ema": state_dict,
-  "optimizer": state_dict,
-  "step": int,
-  "epoch": int,
-  "config": dict,
-  "condition_mappings": dict,
-  "diffusion": dict,
-  "architecture": dict,
-  "seed": dict
-}
+ema = decay * ema + (1 - decay) * current
 ```
 
 #### Dependencies
-- PyTorch serialization.
-- Config module.
-- Condition mapping module.
-- Model and optimizer constructors for reload.
+
+- PyTorch model parameters/state dicts.
 
 #### Failure Handling
-- Missing required checkpoint keys raise a clear `ValueError`.
-- Incompatible condition mappings raise an error before generation.
-- Loading defaults to CPU map location first, then caller moves model to target device.
-- Atomic save pattern writes to a temporary path before replacing the final checkpoint path.
+
+- Decay outside `[0, 1)` is invalid.
+- Missing or shape-mismatched EMA state on resume fails clearly.
+- Disabled EMA should not create fake checkpoint state that sampling mistakes for real EMA weights.
 
 #### Independent Test Plan
-- Save and load a tiny model checkpoint.
-- Verify loaded parameters match saved parameters.
-- Verify EMA update changes shadow parameters after a fake optimizer step.
-- Verify missing checkpoint keys are rejected.
-- Verify condition mappings round-trip exactly.
+
+- Verify one-step scalar EMA math.
+- Verify disabled EMA no-op behavior.
+- Verify EMA state round trips through checkpoint metadata.
+- Verify shape mismatch fails.
 
 #### Open Questions
-- None for the initial design.
+
+- Exact default EMA decay is not fixed by source docs.
+
+### Checkpointing
+
+#### Responsibility
+
+Persist and restore training/generation state, including model weights, optional EMA, optimizer state, config, condition mappings, counters, and reproducibility metadata.
+
+#### Non-Responsibility
+
+Checkpointing does not train, sample, validate PNGs, or decide final model quality.
+
+#### Inputs and Outputs
+
+Inputs:
+
+- Model state.
+- Optional EMA state.
+- Optional optimizer state.
+- Config.
+- Condition mappings.
+- Diffusion and architecture metadata.
+- Step/epoch/seed metadata.
+
+Outputs:
+
+- Checkpoint files.
+- Loaded checkpoint objects or dictionaries.
+- `model.pth` export path when packaging needs it.
+
+#### Public Interface
+
+Expose save, load, schema validation, and optional export behavior. Exact names are implementation details, but the schema must be stable enough for Training Loop, Sampling, and Packaging.
+
+#### Data Structures
+
+Required checkpoint fields:
+
+```text
+model
+config
+condition_mappings
+diffusion
+architecture
+seed
+step
+```
+
+Optional fields:
+
+```text
+ema
+optimizer
+epoch
+metrics
+```
+
+#### Internal Design
+
+Use PyTorch serialization. Prefer CPU-compatible loading by default, with caller-controlled device transfer. Write checkpoints atomically where feasible to avoid corrupt partial files.
+
+#### Algorithm Details
+
+1. Gather state dictionaries and metadata.
+2. Validate required keys.
+3. Save to temporary path.
+4. Replace final path.
+5. On load, validate schema before constructing downstream objects.
+
+#### Dependencies
+
+- PyTorch serialization.
+- Config metadata.
+- Conditions metadata.
+
+#### Failure Handling
+
+- Missing required checkpoint key: `ValueError`.
+- Incompatible architecture/mapping metadata: `ValueError`.
+- Missing checkpoint file: `FileNotFoundError`.
+- Partial/corrupt checkpoint: load error surfaced with path.
+
+#### Independent Test Plan
+
+- Save/load tiny checkpoint.
+- Verify required metadata round trips exactly.
+- Reject checkpoint missing mappings/config/diffusion metadata.
+- Verify generation compatibility check rejects unknown labels.
+- Verify CPU map-location load works.
+
+#### Open Questions
+
+- Exact `model.pth` export contents should be finalized before packaging. It must be enough for TA reproduction.
 
 ### Training Loop
 
 #### Responsibility
-Own the end-to-end training lifecycle: config loading, seeding, dataset/dataloader creation, model construction, optimizer, diffusion loss calls, backpropagation, EMA updates, logging, sample previews, and checkpoint cadence. It does not own individual model block internals or file-level submission validation.
+
+Orchestrate training: seeding, config use, data loading, mapping creation, model/diffusion/EMA construction, optimization, loss computation, checkpoint cadence, and logs.
+
+#### Non-Responsibility
+
+Training Loop does not define model blocks, parse CSV internals, implement final validation, package submissions, or run Codabench scoring.
 
 #### Inputs and Outputs
+
 Inputs:
 
-- Config file, default `configs/default.yaml`.
-- `dataset/train.csv`.
-- `dataset/trainset/`.
+- Resolved config.
+- Training CSV and image directory.
 - Optional resume checkpoint.
 
 Outputs:
 
-- Periodic checkpoints.
-- Training logs.
-- Optional preview sample grids.
-- Final checkpoint or exported `model.pth`.
+- Checkpoints.
+- Logs or progress records.
+- Optional preview samples if implemented.
+
+#### Public Interface
+
+Expose a package entry callable used by `scripts/train.py`. It must support fresh training and planned resume behavior, with exact argument names finalized in implementation.
+
+#### Data Structures
+
+- Training state: step, epoch, optimizer state, random seed metadata, loss metrics.
+- Batch: image tensor plus condition ID tensors.
 
 #### Internal Design
-`train_loop.py` exposes `train(config)`.
 
-Default training behavior:
+Set deterministic seeds for Python, NumPy, and PyTorch where practical. Build mappings from training data for fresh training and restore mappings from checkpoint for resume. Use AdamW or another directly implemented PyTorch optimizer if chosen in config. Mixed precision is optional and must auto-disable or be bypassed for CPU smoke tests.
 
-- Set random seeds for Python, NumPy, and PyTorch.
-- Build condition mappings from training CSV.
-- Construct dataset and dataloader.
-- Construct UNet and `GaussianDiffusion`.
-- Use AdamW with learning rate from config.
-- For each batch, sample random timesteps, apply condition dropout, compute diffusion loss, update model, update EMA, and log loss.
-- Save checkpoints at configured step intervals.
+#### Algorithm Details
 
-Batch size and gradient accumulation are config-driven because GPU memory is unknown. Mixed precision can be config-controlled if available, but CPU smoke tests must work without it.
+Training step:
+
+1. Get image/condition batch.
+2. Sample random timesteps.
+3. Optionally drop conditions for classifier-free guidance.
+4. Compute diffusion epsilon-prediction loss.
+5. Backpropagate.
+6. Optimizer step.
+7. EMA update if enabled.
+8. Log and checkpoint at configured intervals.
 
 #### Dependencies
-- Data and Labels.
-- Conditional UNet.
-- Diffusion Objective.
-- Classifier-Free Guidance.
-- EMA and Checkpointing.
-- Config.
+
+- Configuration.
+- Data Loading.
+- Conditions.
+- Generator Model.
+- Diffusion.
+- EMA.
+- Checkpointing.
 
 #### Failure Handling
-- Config validation happens before allocating large models.
-- Missing dataset paths fail before training starts.
-- Non-finite loss triggers checkpoint/log message and stops unless config says to continue.
-- Resume checkpoint validates architecture and mapping compatibility.
+
+- Config/dataset validation before model allocation.
+- Missing dataset paths fail before training.
+- Non-finite loss fails the run unless a future config explicitly permits skip/continue.
+- Resume checkpoint validates architecture and mappings before optimizer work.
 
 #### Independent Test Plan
-- Run a tiny CPU smoke train with a tiny model, tiny image fixture, and `max_steps=2`.
-- Assert a checkpoint is written.
-- Assert loss is finite.
-- Assert EMA state exists.
-- Assert resume from the tiny checkpoint advances the step counter.
+
+- Tiny CPU smoke training for a bounded number of steps.
+- Assert finite loss.
+- Assert checkpoint written.
+- Assert checkpoint contains mappings/config/diffusion metadata.
+- Assert resume advances step counter when resume is implemented.
 
 #### Open Questions
-- Full training budget and target GPU are not fixed. The design keeps batch size, channels, precision, and accumulation configurable.
+
+- Full training hardware and time budget are unknown.
+- Default optimizer, learning rate, batch size, accumulation, and mixed precision settings should be finalized in `configs/default.yaml`.
 
 ### Sampling
 
 #### Responsibility
-Own reverse diffusion sampling and image tensor postprocessing. It does not own generation CSV parsing, checkpoint schema, or submission validation.
+
+Load generation-time objects and run reverse diffusion to produce image tensors or files conditioned on generation requests.
+
+#### Non-Responsibility
+
+Sampling does not train, build condition mappings from scratch for final generation, validate final output structure, compute FID, or package zip files.
 
 #### Inputs and Outputs
+
 Inputs:
 
-- Loaded model, preferably with EMA weights.
-- Diffusion scheduler.
-- Condition ids.
-- Sampling config: DDIM/DDPM mode, number of steps, guidance scale, seed, batch size.
+- Checkpoint with model/mapping/diffusion metadata.
+- Resolved config.
+- Generation requests.
+- Sampler settings: sampler name, steps, guidance scale, seed, batch size.
 
 Outputs:
 
-- Image tensors in `[0, 1]` or uint8-ready format with shape `[B, 3, 64, 64]`.
+- Generated image tensors or saved RGB PNG files depending on caller path.
+- Generation metadata such as seed and sampler settings.
+
+#### Public Interface
+
+Expose generation behavior callable from `scripts/generate.py`. It must accept checkpoint-backed mappings and write or return outputs in generation CSV order.
+
+#### Data Structures
+
+- Condition batch tensors for requested rows.
+- Generated image tensor `[B, 3, 64, 64]`.
+- Optional generation result records: filename, seed, status.
 
 #### Internal Design
-`sample.py` provides:
 
-- `sample_ddpm(model, diffusion, conditions, shape, guidance_scale)`.
-- `sample_ddim(model, diffusion, conditions, shape, steps, eta, guidance_scale)`.
-- `denormalize_to_uint8(images)`.
+Use EMA weights by default when present. Run DDIM for faster final generation after the DDPM objective is trained; keep DDPM/debug sampling available only if implemented. Apply classifier-free guidance by combining conditional and unconditional predictions when supported by the checkpoint.
 
-DDIM is the default for final generation because the assignment requires 2,000 images and the proposal prioritizes faster sampling. DDPM remains available for debugging.
+#### Algorithm Details
 
-Classifier-free guidance is applied inside each reverse step by evaluating the model with null and real conditions, then combining epsilon predictions.
+Generation flow:
+
+1. Load checkpoint.
+2. Validate generation labels against checkpoint mappings.
+3. Rebuild model/diffusion from checkpoint metadata/config.
+4. Seed sampling.
+5. Batch requests.
+6. Run reverse diffusion.
+7. Clamp and convert tensors to RGB PNG outputs.
 
 #### Dependencies
-- Conditional UNet.
-- Diffusion Objective.
-- Classifier-Free Guidance.
-- Condition batch structures.
+
+- Configuration.
+- Data Loading.
+- Conditions.
+- Generator Model.
+- Diffusion.
+- EMA.
+- Checkpointing.
 
 #### Failure Handling
-- Reject unsupported sampler names.
-- Reject DDIM step counts larger than training timesteps or below 1.
-- Clamp final decoded images to valid range before saving.
-- Make seeded sampling deterministic for fixed model, config, and device where PyTorch permits.
+
+- Missing checkpoint/generate CSV fails immediately.
+- Existing outputs fail unless overwrite is explicit.
+- Unsupported sampler or invalid step count fails before sampling.
+- Unknown labels fail before sampling.
+- Final tensor values are clamped before PNG conversion.
 
 #### Independent Test Plan
-- Use a fake model returning zeros and verify sampler output shape.
-- Run DDIM for a tiny number of steps on CPU.
-- Verify output conversion produces uint8-like values in `[0, 255]`.
-- Verify guidance scale parameter is passed through and affects fake-model combination as expected.
+
+- Use a tiny checkpoint/fake model to generate two fixture PNGs.
+- Assert deterministic output for fixed seed where feasible.
+- Assert filenames match generation CSV exactly.
+- Assert image files open as RGB and `64x64`.
+- Assert existing outputs fail without overwrite.
 
 #### Open Questions
-- None for the initial design.
 
-### Generation Script
+- Exact default sampler steps and guidance scale are training-quality decisions.
+
+### Validation
 
 #### Responsibility
-Own final assignment inference: read `dataset/generate.csv`, load checkpoint, sample images in batches, and write files to `generated_images/` with the exact requested filenames. It does not own training or scoring.
+
+Verify generated submission structure: count, filenames, PNG format, RGB mode, and image size.
+
+#### Non-Responsibility
+
+Validation does not train, sample, score FID/CLIP-T, or create final archives.
 
 #### Inputs and Outputs
+
 Inputs:
 
-- Checkpoint path.
-- Config path.
-- `dataset/generate.csv`.
-- Output directory, default `generated_images/`.
-- Sampling overrides: sampler, steps, guidance scale, seed, batch size.
+- `dataset/generate.csv` or fixture generation CSV.
+- Output directory such as `generated_images/`.
+- Optional report path.
 
 Outputs:
 
-- Exactly one RGB 64x64 PNG for each row in `dataset/generate.csv`.
+- Pass/fail validation result.
+- JSON-compatible report if requested.
+
+#### Public Interface
+
+Expose validation callable for scripts, Evaluation, Packaging, and tests. It must return structured findings and support nonzero CLI exit on failure.
+
+#### Data Structures
+
+- Expected filename set from generate CSV.
+- Actual PNG filename set from output directory.
+- Finding list with severity, filename when relevant, and message.
 
 #### Internal Design
-`scripts/generate.py` calls package logic:
 
-1. Load config and checkpoint.
-2. Reconstruct condition mappings from checkpoint.
-3. Load generation requests.
-4. Build model and diffusion scheduler.
-5. Load EMA weights by default.
-6. Iterate requests in batches.
-7. Sample images using DDIM by default.
-8. Save PNGs to `generated_images/{id}`.
+Use standard library file traversal and Pillow. Compare expected and actual filenames exactly. Open every expected PNG and inspect format/mode/size.
 
-Overwrite behavior is explicit. If output files already exist and `--overwrite` is not set, the script fails before partial generation.
+#### Algorithm Details
+
+1. Load generation CSV.
+2. Build expected filename set and count.
+3. Find PNG files in output directory.
+4. Compare missing/extra filenames.
+5. For each expected file, open image and check PNG/RGB/`64x64`.
+6. Return pass only if all checks pass.
 
 #### Dependencies
-- Data and Labels.
-- EMA and Checkpointing.
-- Conditional UNet.
-- Diffusion Objective.
-- Sampling.
+
+- Data Loading for CSV parsing or shared CSV helper.
+- Pillow.
+- Standard library paths.
 
 #### Failure Handling
-- Missing checkpoint or generate CSV fails immediately.
-- Existing output directory without overwrite fails before sampling.
-- Unknown labels relative to checkpoint mappings fail before sampling.
-- Partial generation writes can be resumed only if an explicit resume mode is later added; initial design keeps overwrite behavior simple.
+
+- Missing output directory: validation failure.
+- Missing/extra files: validation failure.
+- Corrupt image: validation failure with filename.
+- Wrong mode/size/format: validation failure with filename.
 
 #### Independent Test Plan
-- Use a tiny checkpoint and tiny `generate.csv` fixture.
-- Generate two images into a temporary output directory.
-- Assert filenames match the CSV exactly.
-- Assert images open as RGB and are 64x64.
-- Assert existing files fail without `--overwrite`.
+
+- Valid tiny two-image fixture passes.
+- Missing expected file fails.
+- Extra file fails.
+- Wrong size fails.
+- Wrong mode fails.
+- Corrupt PNG fails.
+- JSON report includes enough detail for debugging.
 
 #### Open Questions
-- None for the initial design.
 
-### Local Validation and Scoring
+- Whether nested output directories are allowed should be fixed during implementation. The assignment output implies flat `generated_images/`.
+
+### Evaluation
 
 #### Responsibility
-Own structural validation of generated submissions and local metric execution when reference resources are available. It does not own model training or image generation.
+
+Run structural validation first, then run local FID/evaluator hooks when assets and dependencies are available. Report metric results or explicit skips.
+
+#### Non-Responsibility
+
+Evaluation does not affect the main generator training path, replace Codabench, or make local CLIP-T official.
 
 #### Inputs and Outputs
+
 Inputs:
 
-- `dataset/generate.csv`.
 - Generated image directory.
-- Optional `hw6_reference/test_mu.npy` and `hw6_reference/test_sigma.npy`.
-- Optional scorer resources and open_clip dependency for CLIP-style proxy checks.
+- Generation CSV.
+- `hw6_reference/` assets.
+- Optional scorer-compatible input layout.
+- Optional report path.
 
 Outputs:
 
-- Human-readable validation result.
-- Optional JSON report.
-- Optional FID score.
-- Optional CLIP-T proxy score if local resources allow it.
+- Evaluation report with validation result, FID score if run, and skipped metric reasons.
+
+#### Public Interface
+
+Expose evaluation callable for `scripts/evaluate.py` and a helper path for scorer-input preparation if implemented in package logic.
+
+#### Data Structures
+
+- Report dictionary with `validation`, `metrics`, and `skipped` sections.
+- Optional FID statistics arrays.
 
 #### Internal Design
-`validate.py` checks:
 
-- PNG count equals CSV row count.
-- Expected filenames exactly match output filenames.
-- No missing or extra files.
-- Each image opens with PIL.
-- Each image mode is RGB.
-- Each image size is 64x64.
+Call Validation first. If validation fails, stop before scoring. Local FID may use provided reference stats and torchvision/Inception-style features where available. CLIP-T remains skipped or proxy-only unless explicitly approved and documented.
 
-`evaluate.py` wraps validation and then computes local FID using the same style as `scoring_program/score.py` when reference stats are present. Official CLIP-T cannot be fully reproduced without hidden test metadata, so CLIP-based evaluation remains optional and clearly labeled as proxy-only.
+#### Algorithm Details
 
-`prepare_score_input.py` creates a Codabench-like directory layout for running the provided scorer on FID.
+1. Validate structure.
+2. If invalid, write/report validation failure and stop.
+3. Check reference stats and metric dependencies.
+4. Compute available metrics or record skip reasons.
+5. Write report.
 
 #### Dependencies
-- PIL.
-- NumPy/SciPy/Torch/Torchvision for FID if used.
-- Existing `scoring_program/score.py` for course-compatible scoring behavior.
-- Optional `open_clip` only for proxy CLIP checks.
+
+- Validation.
+- NumPy/SciPy/PyTorch/torchvision for local FID when used.
+- Provided `scoring_program/score.py` behavior as reference.
+- Optional CLIP dependency only if later approved.
 
 #### Failure Handling
-- Validation failure prevents scoring and packaging.
-- Metric dependency absence is reported as skipped, not as a silent zero.
-- Reference stats absence is reported as skipped.
-- Image-size mismatch is reported with filename.
+
+- Validation failure prevents metric calculation.
+- Missing reference stats: metric skipped.
+- Missing optional dependency: metric skipped.
+- CUDA-only scorer path is not assumed available.
 
 #### Independent Test Plan
-- Validate a temporary directory with exact CSV-matching images.
-- Test missing, extra, wrong-size, and non-RGB files.
-- Test FID path with mocked feature arrays or a tiny scorer fixture when full Inception execution is too heavy.
-- Test that optional CLIP proxy reports skipped when dependency or metadata is missing.
+
+- Validation-first behavior with invalid output.
+- Report skip when reference stats are missing.
+- Report skip when CLIP proxy is disabled.
+- Mock or tiny-test FID report plumbing without requiring heavy model downloads.
 
 #### Open Questions
-- Whether to install and support an `open_clip` proxy locally remains optional. The official assignment score comes from Codabench.
+
+- Whether local CLIP proxy evaluation should be implemented is undecided.
 
 ### Packaging
 
 #### Responsibility
-Own creation of the final E3 submission zip layout. It does not own generation, training, or model scoring.
+
+Assemble the final E3 submission archive after validating generated outputs and required artifacts.
+
+#### Non-Responsibility
+
+Packaging does not train models, generate images, compute metrics, or infer the student's ID.
 
 #### Inputs and Outputs
+
 Inputs:
 
 - `generated_images/`.
 - `scripts/`.
 - `src/brainrot_diffusion/`.
+- `configs/` if required for reproducibility.
 - `model.pth`.
 - `README.md`.
 - `requirements.txt`.
-- Output zip path.
+- Student ID.
+- Output path/overwrite flag.
 
 Outputs:
 
-- `HW6_{student_id}.zip` or configured zip path with the assignment-required structure.
+- `HW6_{student_id}.zip` with assignment-required contents.
+
+#### Public Interface
+
+Expose packaging callable used by `scripts/package_submission.py`.
+
+#### Data Structures
+
+- Package manifest.
+- Validation result.
+- Zip entry list.
 
 #### Internal Design
-`package.py` verifies required artifacts exist, runs validation, and writes a zip. It refuses packaging if generated images are invalid.
 
-The package includes:
+Run Validation before writing the archive. Require a real student ID rather than a placeholder. Include implementation files needed for reproduction even though the PDF minimum lists `scripts/`, `model.pth`, `README.md`, and `requirements.txt`.
 
-- `generated_images/`
-- `scripts/`
-- `model.pth`
-- `README.md`
-- `requirements.txt`
-- Source/config files needed for reproducibility
+#### Algorithm Details
 
-The exact top-level folder name is configurable because the PDF requires `HW6_{student_id}` and the student id is not present in the repo.
+1. Validate generated images.
+2. Verify required files/directories exist.
+3. Build manifest.
+4. Refuse existing zip unless overwrite is explicit.
+5. Write zip with deterministic relative paths where practical.
 
 #### Dependencies
-- Local Validation and Scoring for structural checks.
-- Python `zipfile`.
-- Config or CLI argument for student id/output path.
+
+- Validation.
+- Standard library `zipfile` and paths.
 
 #### Failure Handling
-- Missing required artifact fails with a clear path list.
-- Invalid generated images fail before zip creation.
-- Existing zip requires explicit overwrite.
+
+- Invalid images fail before archive write.
+- Missing artifact fails with path list.
+- Placeholder/missing student ID fails.
+- Existing zip fails unless overwrite is explicit.
 
 #### Independent Test Plan
-- Package a tiny valid fixture.
-- Inspect zip entries for expected layout.
-- Verify invalid generated image fixture prevents packaging.
-- Verify missing `model.pth` prevents packaging.
+
+- Package tiny valid fixture.
+- Inspect zip entries.
+- Invalid image fixture prevents packaging.
+- Missing `model.pth` prevents packaging.
+- Placeholder student ID fails.
 
 #### Open Questions
-- Student id is required for final zip naming and must be supplied at packaging time.
 
-### Experiment Plan
+- Final student ID is unknown.
+- Final `model.pth` export schema should be confirmed before submission.
+
+### CLI Scripts
 
 #### Responsibility
-Own experiment sequencing, run naming, config snapshots, and result summaries. It does not own training math or validation logic.
+
+Provide thin command-line wrappers for training, generation, validation, evaluation, scorer input preparation, and packaging.
+
+#### Non-Responsibility
+
+Scripts do not own core algorithms or duplicate package logic.
 
 #### Inputs and Outputs
+
 Inputs:
 
-- Config files.
-- Training checkpoints.
-- Generated image directories.
-- FID and validation reports.
-- Visual sample grids.
+- CLI arguments and paths.
 
 Outputs:
 
-- Run directories with config, logs, checkpoints, generated samples, and reports.
-- A selected final checkpoint/config for submission.
+- Process exit status.
+- Checkpoints, images, reports, scorer input directories, or packages through package module calls.
 
-#### Internal Design
-Experiments run in the proposal order:
+#### Public Interface
 
-1. Tiny smoke run.
-2. Full DDPM baseline with animal + object + pair embeddings.
-3. Guidance sweep over `1.0`, `1.5`, `2.0`, `3.0`.
-4. DDIM step sweep over 50, 100, 200, 250.
-5. Conditioning ablation only if time allows.
-
-Each run stores resolved config, seed, checkpoint path, generation command, validation report, and available metrics.
-
-#### Dependencies
-- Training Loop.
-- Generation Script.
-- Local Validation and Scoring.
-- Checkpointing.
-
-#### Failure Handling
-- Failed runs keep logs but are not eligible for final packaging.
-- Metric absence is reported as unavailable rather than as success.
-- Final selection requires valid generated output.
-
-#### Independent Test Plan
-- Test experiment metadata writing with a fake run.
-- Test that a result summary can read multiple report JSON files.
-- Test that invalid validation reports are excluded from final selection.
-
-#### Open Questions
-- Full run selection criteria depend on available Codabench attempts and training time.
-
-## Cross-Module Contracts
-
-### Condition Batch Contract
-All modules pass condition ids in a structure equivalent to:
-
-```text
-{
-  "animal_id": LongTensor[B],
-  "object_id": LongTensor[B],
-  "pair_id": LongTensor[B]
-}
-```
-
-Null/unconditional conditions use the same keys and batch dimension.
-
-### Image Tensor Contract
-Training image tensors use:
-
-```text
-shape: [B, 3, 64, 64]
-dtype: float32
-range: [-1, 1]
-```
-
-Generated image tensors are converted to RGB PNG after clamping and denormalizing.
-
-### Model Forward Contract
-The UNet forward interface is:
-
-```text
-model(x_t, t, conditions) -> epsilon_pred
-```
-
-Input and output image tensors have identical shape.
-
-### Checkpoint Contract
-Generation requires checkpoint metadata for:
-
-- Model weights or EMA weights.
-- Architecture config.
-- Diffusion config.
-- Condition mappings.
-- Seed/config metadata.
-
-Generation must not rebuild mappings from `generate.csv`; it must use checkpoint mappings from training.
-
-### CLI Contract
-Scripts expose stable assignment-oriented commands:
+Known planned commands from README/quality gates:
 
 ```bash
 python scripts/train.py --config configs/default.yaml
-python scripts/generate.py --checkpoint checkpoints/best.pt --config configs/default.yaml --overwrite
-python scripts/validate_submission.py --generate-csv dataset/generate.csv --output-dir generated_images
-python scripts/evaluate.py --generate-csv dataset/generate.csv --output-dir generated_images
-python scripts/package_submission.py --checkpoint model.pth --zip-path HW6_STUDENT_ID.zip
+python scripts/generate.py --checkpoint checkpoints/checkpoint_step_1000.pt --config configs/default.yaml --overwrite
+python scripts/validate_submission.py --generate-csv dataset/generate.csv --output-dir generated_images --report-json reports/validation.json
+python scripts/evaluate.py --generate-csv dataset/generate.csv --output-dir generated_images --reference-dir hw6_reference --report-path reports/evaluation.json
+python scripts/prepare_score_input.py --generate-csv dataset/generate.csv --generated-images generated_images --score-input-dir score_input --test-mu hw6_reference/test_mu.npy --test-sigma hw6_reference/test_sigma.npy --scores fid --overwrite
+python scripts/package_submission.py --generate-csv dataset/generate.csv --generated-images generated_images --checkpoint model.pth --student-id STUDENT_ID --overwrite
 ```
 
-Exact flags may grow, but these commands should remain valid.
+#### Data Structures
 
-## Test Strategy
-Testing is layered:
+- Parsed `argparse` namespace or equivalent.
+- Package module return values converted to exit status and messages.
 
-1. Unit tests for conditions, datasets, diffusion math, model shape, guidance, EMA, checkpoints, validation, and packaging.
-2. CPU smoke tests with tiny channel counts and tiny image fixtures.
-3. Script-level smoke tests for train, generate, validate, and package using temporary directories.
-4. Local FID execution after real generation when reference stats and dependencies are available.
-5. Visual sample grids for semantic alignment and collapse checks.
+#### Internal Design
 
-Suggested quality commands after implementation:
+Use `argparse` and call package modules. Keep scripts short. Any behavior that needs tests belongs in `src/brainrot_diffusion/`, not only in scripts.
+
+#### Algorithm Details
+
+1. Parse arguments.
+2. Load config if needed.
+3. Call package module.
+4. Print concise status.
+5. Return nonzero on validation or runtime errors.
+
+#### Dependencies
+
+- Package modules.
+- Python standard library `argparse`.
+
+#### Failure Handling
+
+- Missing required arguments fail through argument parser.
+- Package exceptions result in nonzero exits.
+- Mutating commands require explicit overwrite/resume flags where applicable.
+
+#### Independent Test Plan
+
+- Unit-test parser behavior where useful.
+- Script-level smoke tests on tiny fixtures after implementation exists.
+- Confirm thin scripts do not duplicate core validation/generation logic.
+- Confirm invalid inputs return nonzero.
+
+#### Open Questions
+
+- Exact optional flags may change during implementation, but known README commands should remain aligned.
+
+### Tests
+
+#### Responsibility
+
+Provide small CPU tests and fixtures that verify module contracts, integration paths, and regression cases from `doc/test-plan.md`.
+
+#### Non-Responsibility
+
+Tests do not perform full GPU training, official Codabench scoring, or subjective image-quality evaluation.
+
+#### Inputs and Outputs
+
+Inputs:
+
+- Tiny CSV fixtures.
+- Tiny generated/training image fixtures.
+- Temporary directories.
+- Package modules.
+
+Outputs:
+
+- Pytest pass/fail results.
+
+#### Public Interface
+
+`python -m pytest` is the discovered test command once tests exist.
+
+#### Data Structures
+
+- Fixture CSVs matching assignment columns.
+- Tiny RGB images.
+- Fake/tiny checkpoints.
+- Expected validation reports.
+
+#### Internal Design
+
+Keep tests independent by module. Use shared tiny fixtures only where they reduce duplication without coupling unrelated modules. Avoid heavy GPU/scorer/model-download requirements.
+
+#### Algorithm Details
+
+Layered tests:
+
+1. Unit tests for config, data, conditions, model shapes, diffusion math, EMA, checkpointing, validation, evaluation skips, and packaging.
+2. Integration tests for tiny train -> checkpoint -> generate -> validate.
+3. CLI smoke tests for representative script paths when implementation exists.
+
+#### Dependencies
+
+- Pytest.
+- Pillow.
+- PyTorch.
+- Package modules.
+
+#### Failure Handling
+
+- Tests should fail on invalid shape, mapping drift, missing metadata, output format mistakes, and accidental dependence on unavailable GPU/scorer resources.
+
+#### Independent Test Plan
+
+- This module owns the test suite itself. Its independent verification is that `python -m pytest` discovers and runs tests after implementation.
+- `python -m compileall src scripts tests` verifies import/syntax once files exist.
+
+#### Open Questions
+
+- Exact fixture layout is not fixed. Keep it minimal.
+
+## Cross-Module Contracts
+
+- Configuration feeds every workflow and is stored in checkpoints.
+- Data Loading owns row parsing; Conditions owns ID mapping.
+- Training Loop builds or restores mappings before constructing condition-aware datasets and model embeddings.
+- Generator Model consumes only tensors and condition IDs; it never reads files.
+- Diffusion calls Generator Model through the forward contract and never owns optimizer state.
+- EMA reads model parameters after optimizer steps and is checkpointed separately from raw model weights.
+- Checkpointing is the only persistence boundary for model/config/mapping/diffusion metadata.
+- Sampling must use Checkpointing and Conditions metadata before writing images.
+- Validation is the gate before Evaluation and Packaging.
+- Evaluation is optional and reports skips explicitly.
+- CLI Scripts are wrappers; core behavior belongs in package modules.
+- Tests verify module contracts and at least one end-to-end tiny workflow.
+
+## End-to-End Workflow
+
+Training workflow:
+
+```text
+scripts/train.py
+  -> Configuration
+  -> Data Loading
+  -> Conditions
+  -> Generator Model
+  -> Diffusion
+  -> Training Loop
+  -> EMA
+  -> Checkpointing
+```
+
+Generation workflow:
+
+```text
+scripts/generate.py
+  -> Configuration
+  -> Checkpointing
+  -> Conditions compatibility validation
+  -> Generator Model
+  -> Diffusion
+  -> EMA weights when available
+  -> Sampling
+  -> generated_images/{id}
+```
+
+Validation/evaluation workflow:
+
+```text
+scripts/validate_submission.py
+  -> Validation
+
+scripts/evaluate.py
+  -> Validation
+  -> Evaluation metrics or explicit skips
+```
+
+Packaging workflow:
+
+```text
+scripts/package_submission.py
+  -> Validation
+  -> Packaging
+  -> HW6_{student_id}.zip
+```
+
+## Test Strategy Mapping
+
+| Test-plan requirement | Design coverage |
+| --- | --- |
+| Config loading and validation | Configuration module tests and CLI script parser checks |
+| CSV parsing | Data Loading unit tests |
+| RGB image loading and tensor shapes | Data Loading unit tests |
+| Stable animal/object/pair mappings | Conditions unit and property tests |
+| Checkpoint-compatible generation mappings | Conditions, Checkpointing, Sampling integration tests |
+| From-scratch model initialization and output shape | Generator Model unit tests |
+| Diffusion schedule, noising, finite loss | Diffusion unit tests |
+| EMA update and checkpoint inclusion | EMA and Checkpointing tests |
+| Tiny CPU training smoke path | Training Loop integration test |
+| Deterministic tiny sampling where feasible | Sampling tests |
+| Final filename/count/PNG/RGB/size validation | Validation unit and integration tests |
+| Evaluation validation-first behavior and metric skips | Evaluation tests |
+| Packaging refusal on invalid outputs | Packaging tests |
+| CLI argument parsing and nonzero invalid exits | CLI Scripts tests |
+| README command alignment | Tests or manual verification after implementation |
+| Golden tiny train/generate CSV cases | Data Loading, Conditions, Sampling, Validation tests |
+| Randomized exact filename-set validation | Validation property tests |
+| Wrong mode/size/corrupt PNG edge cases | Validation tests |
+| Missing checkpoint metadata | Checkpointing tests |
+| Unknown labels at generation time | Conditions/Sampling tests |
+| Existing outputs without overwrite | Sampling and CLI tests |
+| Manual visual review | Manual Verification before final submission |
+
+## Quality Gates
+
+Known, not run:
+
+```bash
+python -m compileall src scripts tests
+```
+
+Known, not run:
 
 ```bash
 python -m pytest
-python -m compileall src scripts tests
-python scripts/validate_submission.py --generate-csv dataset/generate.csv --output-dir generated_images
 ```
 
-`ruff` can be added if the project chooses to include it in `requirements.txt` or development tooling.
+Known, not run:
+
+```bash
+python scripts/validate_submission.py --generate-csv dataset/generate.csv --output-dir generated_images --report-json reports/validation.json
+```
+
+Known, not run:
+
+```bash
+python scripts/evaluate.py --generate-csv dataset/generate.csv --output-dir generated_images --reference-dir hw6_reference --report-path reports/evaluation.json
+```
+
+Known, not run:
+
+```bash
+python scripts/package_submission.py --generate-csv dataset/generate.csv --generated-images generated_images --checkpoint model.pth --student-id STUDENT_ID --overwrite
+```
+
+Known, not run:
+
+```bash
+python3 score.py --input_dir $input --output_dir $output --config config.json
+```
+
+Notes:
+
+- `src/`, `scripts/`, `configs/`, and `tests/` are not currently present, so the planned gates are not yet runnable as documented.
+- The Codabench-style scorer path expects a scorer input layout, writes `scores.json`, uses `cuda:0`, and may require pretrained evaluation weights.
+- No command above is verified until explicitly run.
 
 ## Risks and Mitigations
-- Risk: diffusion training may be slow on limited hardware. Mitigation: DDIM sampling, configurable model width, mixed precision, gradient accumulation, and smoke tests before full runs.
-- Risk: high guidance improves CLIP-T but worsens FID. Mitigation: sweep guidance scales and select with local FID plus visual review.
-- Risk: condition mappings drift between train and generate. Mitigation: save mappings in checkpoints and require generation to load them.
-- Risk: output format mistakes cause score loss. Mitigation: validation gates before scoring and packaging.
-- Risk: local CLIP-T cannot exactly match Codabench without hidden metadata. Mitigation: treat local CLIP checks as proxy-only and rely on official submissions for final CLIP-T.
-- Risk: README currently describes files not yet implemented. Mitigation: update README after implementation to match actual commands and artifacts.
+
+- Risk: implementation files are absent while docs describe planned behavior. Mitigation: treat live files as truth and start with scaffold plus tests.
+- Risk: output format mistakes cause penalties. Mitigation: implement Validation early and use it before evaluation/packaging.
+- Risk: mapping drift breaks conditional generation. Mitigation: checkpoint mappings and reject incompatible generation labels before sampling.
+- Risk: full training may exceed available hardware/time. Mitigation: tiny CPU smoke tests first; keep batch size, model width, precision, accumulation, DDIM steps, and guidance scale configurable.
+- Risk: local metrics differ from official Codabench. Mitigation: label local FID/CLIP checks as local/proxy and preserve official submission as final authority.
+- Risk: pretrained auxiliary modules could violate the assignment if misused. Mitigation: do not add CLIP/VAE generation paths without explicit approval and documentation.
+- Risk: optional scorer dependencies may require network/GPU. Mitigation: keep scorer execution out of core tests and report metric skips explicitly.
+
+## Assumptions
+
+- Python 3.10+, PyTorch, and the current `requirements.txt` remain the implementation stack.
+- The first implementation uses only the provided Brainrot Dataset.
+- Pixel-space conditional diffusion is the selected baseline.
+- Generated images are written to a flat `generated_images/` directory.
+- TA reproduction should be possible from submitted package artifacts and checkpoint metadata.
+- The user has implicitly authorized updating `doc/detailed-design.md` by requesting this skill command; no production code or evaluator command is included.
 
 ## Open Questions
-- What GPU and training-time budget are available for full runs?
-- What student id should packaging use for the final `HW6_{student_id}.zip` filename?
-- Should optional `open_clip` proxy scoring be included in the first implementation dependencies, or kept out until needed?
-- Should random horizontal flip be enabled after visual inspection, or kept disabled for the first full training run?
+
+- What GPU and training-time budget are available?
+- What student ID should be used for `HW6_{student_id}.zip`?
+- What is the exact E3 deadline?
+- Should local CLIP proxy evaluation be implemented, or should CLIP-T be left to Codabench only?
+- Should any auxiliary pretrained CLIP or VAE path be used later, or avoided entirely?
+- Should generation prompt mismatch be a warning or a hard validation error?
+- Should pair mappings include all 100 possible animal-object pairs or only observed training pairs?
+- What default diffusion schedule, model width, optimizer settings, EMA decay, DDIM step count, and guidance scale should be used in `configs/default.yaml`?
+- What exact `model.pth` export schema should final packaging use?

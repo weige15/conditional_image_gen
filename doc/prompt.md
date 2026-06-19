@@ -1,322 +1,457 @@
-# Vibe Coding Implementation Prompt
+# Implementation Prompt
 
 ## Objective
 
-Implement the HW6 Brainrot Image Generation project end to end as a from-scratch conditional DDPM/DDIM generator. The finished repository must train a pixel-space conditional diffusion model on the provided Brainrot dataset and provide scripts to generate exactly 2,000 RGB 64x64 PNG files from `dataset/generate.csv`.
+Implement the HW6 Brainrot Image Generation repository end to end. The finished project must train a from-scratch conditional image generation model for animal-object Brainrot images and generate exactly 2,000 RGB `64x64` PNG files from `dataset/generate.csv`.
 
-The main generator must be trained from scratch. Do not use pretrained UNet, Transformer, diffusion, GAN, or other pretrained generative weights. Do not use Diffusers pipelines or high-level pretrained generation/training flows. Pretrained Inception/CLIP-style models may be used only for evaluation/proxy scoring, consistent with the assignment.
+Use the current design direction: a Python 3.10+/PyTorch pixel-space conditional diffusion baseline under `src/brainrot_diffusion/`, with thin CLI scripts under `scripts/`, reproducible config under `configs/`, and CPU-friendly tests under `tests/`.
 
-## Inputs
+## Inputs to Read First
 
-Read these files first:
+Read these before coding, in this order:
 
-- `Brainrot_Image_Gen.pdf`: assignment rules, scoring, output format, and submission structure.
-- `doc/proposal.md`: selected algorithm and project assumptions.
-- `doc/detailed-design.md`: module boundaries, contracts, failure handling, and test strategy.
-- `doc/tasks/progress.md`: overall module checklist.
-- `doc/tasks/*.md`: concrete implementation tasks per module.
-- `README.md`: intended command surface, but verify against actual implementation because the described code does not yet exist.
-- `scoring_program/score.py`: local course-compatible FID/CLIP scorer behavior.
-- `hw6_reference/config.json`, `hw6_reference/test_mu.npy`, `hw6_reference/test_sigma.npy`: local FID resources.
-- `dataset/train.csv`, `dataset/generate.csv`, and `dataset/trainset/`: assignment data.
+- `AGENTS.md`: repository rules, permission rules, forbidden commands, and assignment constraints.
+- `doc/problem-brief.md` (present): assignment objective, inputs, outputs, constraints, scoring, deliverables, and open questions.
+- `doc/repo-map.md` (present): current repository state and missing implementation directories.
+- `doc/quality-gates.md` (present): discovered commands, missing gates, and command status.
+- `doc/proposal.md`: selected from-scratch conditional diffusion approach, milestones, validation plan, risks, and assumptions.
+- `doc/high-level-design.md`: module boundaries, data flow, contracts, and operational constraints.
+- `doc/test-plan.md`: required verification strategy, unit/integration scope, golden cases, edge cases, and known commands.
+- `doc/detailed-design.md`: module responsibilities, public contracts, algorithms, failure handling, and test strategy mapping.
+- `doc/tasks/progress.md`: current module checklist.
+- `doc/tasks/configuration.md`
+- `doc/tasks/data-loading.md`
+- `doc/tasks/conditions.md`
+- `doc/tasks/generator-model.md`
+- `doc/tasks/diffusion.md`
+- `doc/tasks/ema.md`
+- `doc/tasks/checkpointing.md`
+- `doc/tasks/training-loop.md`
+- `doc/tasks/sampling.md`
+- `doc/tasks/validation.md`
+- `doc/tasks/evaluation.md`
+- `doc/tasks/packaging.md`
+- `doc/tasks/cli-scripts.md`
+- `doc/tasks/tests.md`
+- `README.md`: planned command surface; treat it as intent until implementation exists.
+- `pyproject.toml`: `setuptools` project metadata, package discovery under `src`.
+- `requirements.txt`: current dependency list.
+- `scoring_program/score.py` and `scoring_program/metadata`: provided evaluator behavior.
 
 ## Current Implementation
 
-The current repository is mostly an assignment bundle plus planning docs. It contains:
+Current repo root: `/home/kuotzuwei15/GenAI/hw6`.
 
-- Dataset files under `dataset/`.
-- Reference FID statistics under `hw6_reference/`.
-- Codabench-style scorer under `scoring_program/score.py`.
-- Planning docs under `doc/`.
-- Research notes: `research-log.md`, `Brainrot_Image_Gen_implementation_survey.md`, and `findings.md`.
-- A README that describes the intended future project layout.
+Present:
 
-The implementation does not currently contain:
+- Assignment assets: `Brainrot_Image_Gen.pdf`, `dataset/train.csv`, `dataset/generate.csv`, `dataset/trainset/`.
+- Reference/evaluator assets: `hw6_reference/test_mu.npy`, `hw6_reference/test_sigma.npy`, `hw6_reference/config.json`, `scoring_program/score.py`, `scoring_program/metadata`.
+- Packaging metadata: `pyproject.toml`, `requirements.txt`.
+- Planning docs: `doc/problem-brief.md`, `doc/repo-map.md`, `doc/quality-gates.md`, `doc/proposal.md`, `doc/high-level-design.md`, `doc/test-plan.md`, `doc/detailed-design.md`, `doc/tasks/*.md`.
+- README with planned setup/train/generate/validate/evaluate/package commands.
+
+Missing and must be created:
 
 - `src/brainrot_diffusion/`
 - `scripts/`
 - `configs/`
 - `tests/`
-- `requirements.txt`
-- `pyproject.toml`
+- `checkpoints/`, `generated_images/`, `reports/`, and `score_input/` only when commands legitimately generate them.
 
-Create the missing implementation. Prefer a simple pip/`requirements.txt` project because the assignment requires `requirements.txt`. Do not introduce `uv` as a hard dependency unless there is a clear reason.
+No main package modules, CLI scripts, config files, or tests currently exist. Do not trust older planning notes or stale task checkboxes over live files. `doc/tasks/progress.md` currently marks all current module tasks incomplete.
+
+Current dependency files:
+
+- `requirements.txt`: `torch`, `torchvision`, `numpy`, `Pillow`, `PyYAML`, `scipy`, `tqdm`, `pytest`.
+- `pyproject.toml`: project name `brainrot-diffusion`, Python `>=3.10`, package discovery under `src`.
+
+## Hard Constraints
+
+- Main generator must be trained from scratch.
+- Do not use pretrained UNet, Transformer, diffusion, GAN, or other pretrained generative weights for the main generator.
+- Do not use Diffusers pipelines or high-level pretrained generation/training flows.
+- Use PyTorch directly for model, loss, scheduler, training loop, and sampling loop.
+- Pretrained CLIP or VAE may be used only as auxiliary evaluation, feature extraction, or latent representation modules. Ask the user before adding either.
+- First implementation path uses only the provided Brainrot Dataset.
+- Final generated output must contain exactly 2,000 PNG files.
+- Final generated images must be RGB, `64x64`, and named exactly according to `dataset/generate.csv`.
+- Generation must use checkpoint-saved condition mappings, not mappings rebuilt from `dataset/generate.csv`.
+- Checkpoints must preserve enough metadata to reproduce generation: config, step, EMA state if used, condition mappings, diffusion metadata, architecture metadata, and seed metadata.
+- Preserve assignment assets: `Brainrot_Image_Gen.pdf`, `dataset/`, `hw6_reference/`, and `scoring_program/`.
+- Do not overwrite generated images, checkpoints, reports, submissions, or package zips unless explicitly requested or an explicit overwrite flag is used.
+- Do not commit or push unless the user asks.
+- Follow `AGENTS.md`: ask before installs, tests, build commands, training, generation, packaging, scoring, file deletion, Git state changes, and other mutating/expensive commands.
+
+## Non-Goals
+
+- Do not optimize for leaderboard score before the train/generate/validate/package path works.
+- Do not add extra data workflows in the first pass.
+- Do not make CLIP/VAE part of final-image generation.
+- Do not implement a separate `guidance.py` module unless the implementation clearly needs it; the current detailed design assigns guidance behavior across Conditions, Generator Model, Training Loop, Sampling, and Diffusion.
+- Do not add lint/format/type-check tools unless explicitly chosen. Current docs mark those gates as missing.
+- Do not run official scorer paths as unit tests; `scoring_program/score.py` uses CUDA and pretrained evaluation models.
 
 ## Execution Model
 
-Work autonomously to completion. The main agent owns the whole implementation, tracks progress in `doc/tasks/progress.md`, decomposes work by module, spawns subagents for independent modules where useful, integrates their results, resolves conflicts, and finishes with the actual repository quality gates passing.
+- Start by running read-only discovery: `git status --short --branch`, `rg --files`, and targeted `sed` reads of the docs above.
+- Maintain `doc/tasks/progress.md` throughout the implementation. Add timestamped notes or checkpoint entries when a module starts, completes, is blocked, or is verified.
+- Implement one module or small workstream at a time.
+- After each module, run the smallest relevant module-specific check if the user has approved test/build execution in this session.
+- Run full quality gates at the end after implementation exists and permission is approved.
+- Summarize command output as evidence; the user does not see raw tool output.
+- Keep write scopes disjoint when using subagents.
+- Never revert edits made by the user or other agents unless explicitly asked.
+- Stop and ask only when truly blocked by missing requirements, destructive choices, credentials, external services, or an assignment-rule ambiguity that cannot be handled conservatively.
 
-Do not pause for human-in-the-loop checkpoints unless blocked by missing external information that cannot be safely assumed. Make conservative implementation decisions consistent with `doc/proposal.md` and `doc/detailed-design.md`.
+## Module Workstreams
 
-When using subagents:
+### Workstream A: Scaffold, Config, Data, Conditions
 
-- Give each subagent a disjoint write scope.
-- Tell each subagent to read the relevant `doc/tasks/<module>.md` and the contracts in `doc/detailed-design.md`.
-- Tell subagents not to revert unrelated changes and to adapt to concurrent edits.
-- Integrate subagent work through the main agent and run the full test suite after integration.
+Owns:
 
-Update each module task file and `doc/tasks/progress.md` only when the corresponding checklist items are actually complete.
-
-## Module Plan
-
-### Workstream 1: Project Scaffold and Data
-
-Ownership:
-
-- `requirements.txt`
 - `src/brainrot_diffusion/__init__.py`
 - `src/brainrot_diffusion/config.py`
-- `src/brainrot_diffusion/conditions.py`
 - `src/brainrot_diffusion/data.py`
-- Data-related tests under `tests/`
+- `src/brainrot_diffusion/conditions.py`
+- `configs/default.yaml`
+- `tests/test_config.py`
+- `tests/test_data.py`
+- `tests/test_conditions.py`
+- `doc/tasks/configuration.md`
+- `doc/tasks/data-loading.md`
+- `doc/tasks/conditions.md`
 
-Tasks:
+Implement:
 
-- Implement config loading and validation for paths, model, diffusion, optimizer, EMA, sampling, and logging settings.
-- Implement deterministic animal/object/pair/null mappings.
-- Implement `BrainrotTrainDataset`, `GenerationRequestDataset`, and generation-request loading.
-- Load images as RGB 64x64 tensors normalized to `[-1, 1]`.
-- Add isolated tests for mappings, image loading, missing files, missing columns, duplicate generation ids, and unknown labels.
+- Config loading, CLI override application, validation, and serializable resolved config.
+- `configs/default.yaml` with sections for data, model, diffusion, training, sampling, checkpointing, validation, evaluation, and packaging.
+- Train/generate CSV parsing with required-column and duplicate-ID validation.
+- RGB image loading to `[3, 64, 64]` tensors normalized to `[-1, 1]`.
+- Ordered generation request records.
+- Stable animal/object/pair mappings, checkpoint-compatible serialization, unknown-label rejection, and optional null-condition IDs.
 
-Task files:
+Verify:
 
-- `doc/tasks/data-and-labels.md`
-- config task from `doc/tasks/training-loop.md`
+- `python -m pytest tests/test_config.py tests/test_data.py tests/test_conditions.py`
 
-### Workstream 2: Model, Diffusion, and Guidance
+### Workstream B: Model, Diffusion, EMA, Checkpointing
 
-Ownership:
+Owns:
 
-- `src/brainrot_diffusion/unet.py`
+- `src/brainrot_diffusion/model.py`
 - `src/brainrot_diffusion/diffusion.py`
-- `src/brainrot_diffusion/guidance.py`
-- Model/diffusion/guidance tests under `tests/`
-
-Tasks:
-
-- Implement a from-scratch residual conditional UNet for `[B, 3, 64, 64] -> [B, 3, 64, 64]`.
-- Include sinusoidal timestep embeddings and learned animal/object/pair/null condition embeddings.
-- Inject conditioning into residual blocks using FiLM-style scale/shift or the documented additive fallback.
-- Implement cosine DDPM schedule, epsilon-prediction MSE loss, `q_sample`, DDPM reverse helper, and DDIM step helper.
-- Implement classifier-free condition dropout and guided epsilon combination.
-- Add CPU tests with tiny channel/model settings.
-
-Task files:
-
-- `doc/tasks/conditional-unet.md`
-- `doc/tasks/diffusion-objective.md`
-- `doc/tasks/classifier-free-guidance.md`
-
-### Workstream 3: Checkpointing and Training
-
-Ownership:
-
 - `src/brainrot_diffusion/ema.py`
 - `src/brainrot_diffusion/checkpoint.py`
+- `tests/test_model.py`
+- `tests/test_diffusion.py`
+- `tests/test_ema.py`
+- `tests/test_checkpoint.py`
+- `doc/tasks/generator-model.md`
+- `doc/tasks/diffusion.md`
+- `doc/tasks/ema.md`
+- `doc/tasks/checkpointing.md`
+
+Implement:
+
+- From-scratch compact UNet-style PyTorch model with timestep and animal/object/pair condition embeddings.
+- Forward contract: `model(x_t, timesteps, conditions) -> predicted_noise`, output shape `[B, 3, 64, 64]`.
+- Diffusion schedules, `q_sample`-style noising, epsilon-prediction MSE loss, and DDPM/DDIM reverse helpers.
+- EMA helper with update, disabled no-op path, state serialization, and state validation.
+- Checkpoint save/load/schema validation with required metadata: `model`, `config`, `condition_mappings`, `diffusion`, `architecture`, `seed`, and `step`; optional `ema`, `optimizer`, `epoch`, `metrics`.
+
+Verify:
+
+- `python -m pytest tests/test_model.py tests/test_diffusion.py tests/test_ema.py tests/test_checkpoint.py`
+
+### Workstream C: Training And Sampling
+
+Owns:
+
 - `src/brainrot_diffusion/train_loop.py`
-- `configs/default.yaml`
-- `scripts/train.py`
-- EMA/checkpoint/training tests under `tests/`
-
-Tasks:
-
-- Implement EMA shadow-parameter tracking and application.
-- Implement checkpoint save/load/export with model, EMA, optimizer, step, epoch, config, condition mappings, diffusion metadata, architecture metadata, and seed metadata.
-- Implement `train(config)` with seeding, dataloader, UNet, diffusion, AdamW, condition dropout, EMA updates, checkpoint cadence, optional resume, and finite-loss checks.
-- Implement `scripts/train.py` as a thin CLI.
-- Add a CPU smoke training test with a tiny image fixture and `max_steps=2`.
-
-Task files:
-
-- `doc/tasks/ema-and-checkpointing.md`
-- `doc/tasks/training-loop.md`
-
-### Workstream 4: Sampling and Generation
-
-Ownership:
-
 - `src/brainrot_diffusion/sample.py`
-- `scripts/generate.py`
-- Sampling/generation tests under `tests/`
-
-Tasks:
-
-- Implement DDPM and DDIM samplers.
-- Apply classifier-free guidance inside reverse steps.
-- Convert generated tensors to valid RGB PNG data.
-- Implement `scripts/generate.py` to load config/checkpoint/EMA/mappings, read `dataset/generate.csv`, and write `generated_images/{id}`.
-- Fail before sampling when output files exist without `--overwrite`.
-- Add tiny fixture tests that generate two PNGs and verify exact filenames, RGB mode, size, and overwrite behavior.
-
-Task files:
-
+- training/sampling pieces of `scripts/train.py` and `scripts/generate.py`
+- `tests/test_train_loop.py`
+- `tests/test_sample.py`
+- `doc/tasks/training-loop.md`
 - `doc/tasks/sampling.md`
-- `doc/tasks/generation-script.md`
 
-### Workstream 5: Validation, Evaluation, Packaging, and Experiments
+Implement:
 
-Ownership:
+- Fresh training entry point using resolved config and assignment dataset paths.
+- Seeds for Python, NumPy, and PyTorch where practical; record seed metadata.
+- Dataloader, model, diffusion, optimizer, EMA, finite-loss checks, logging, and checkpoint cadence.
+- Optional resume validation when included.
+- Checkpoint-backed generation that loads config/mappings/model/diffusion/EMA, validates generation labels, seeds sampling, batches requests, and writes exact CSV filenames.
+- DDIM/DDPM sampling path with guidance scale handling if model/checkpoint supports classifier-free guidance.
+- Refusal to overwrite existing outputs without explicit `--overwrite`.
+
+Verify:
+
+- `python -m pytest tests/test_train_loop.py tests/test_sample.py`
+
+### Workstream D: Validation, Evaluation, Packaging
+
+Owns:
 
 - `src/brainrot_diffusion/validate.py`
 - `src/brainrot_diffusion/evaluate.py`
 - `src/brainrot_diffusion/package.py`
-- optional experiment metadata helpers
+- validation/evaluation/packaging pieces of `scripts/validate_submission.py`, `scripts/evaluate.py`, `scripts/prepare_score_input.py`, `scripts/package_submission.py`
+- `tests/test_validate.py`
+- `tests/test_evaluate.py`
+- `tests/test_package.py`
+- `doc/tasks/validation.md`
+- `doc/tasks/evaluation.md`
+- `doc/tasks/packaging.md`
+
+Implement:
+
+- Strict validation: exact expected filename set, no extras/missing files, PNG readability, PNG format, RGB mode, and `64x64`.
+- JSON-compatible validation report data.
+- Evaluation that runs validation first and then computes available local FID or records explicit skip reasons.
+- Scorer input preparation if needed by the planned CLI.
+- Packaging that validates first, rejects placeholder student ID, verifies required artifacts, refuses overwrite unless explicit, and writes `HW6_{student_id}.zip`.
+
+Verify:
+
+- `python -m pytest tests/test_validate.py tests/test_evaluate.py tests/test_package.py`
+
+### Workstream E: CLI Scripts, Tests, Docs Integration
+
+Owns:
+
+- `scripts/train.py`
+- `scripts/generate.py`
 - `scripts/validate_submission.py`
 - `scripts/evaluate.py`
 - `scripts/prepare_score_input.py`
 - `scripts/package_submission.py`
-- validation/evaluation/packaging/experiment tests under `tests/`
-
-Tasks:
-
-- Implement strict submission validation: exact count, exact filenames, PNG readability, RGB mode, and 64x64 size.
-- Implement local FID path compatible with `hw6_reference/test_mu.npy`, `hw6_reference/test_sigma.npy`, and `scoring_program/score.py`.
-- Treat missing optional metric dependencies or hidden CLIP-T metadata as skipped with explicit report fields.
-- Implement Codabench-like score input preparation for FID.
-- Implement packaging that validates first and then creates the assignment zip with required artifacts.
-- Implement experiment metadata helpers or minimal scripts that record config, seed, checkpoint, generation command, validation report, and metric report per run.
-
-Task files:
-
-- `doc/tasks/local-validation-and-scoring.md`
-- `doc/tasks/packaging.md`
-- `doc/tasks/experiment-plan.md`
-
-### Workstream 6: Documentation and Integration
-
-Ownership:
-
+- `tests/test_scripts.py`
+- shared test fixtures/helpers under `tests/`
 - `README.md`
-- `doc/tasks/*.md`
-- integration tests and final cleanup
+- `doc/tasks/cli-scripts.md`
+- `doc/tasks/tests.md`
+- `doc/tasks/progress.md`
 
-Tasks:
+Implement:
 
-- Update `README.md` to match the actual implemented commands and paths.
-- Keep `doc/tasks/*.md` and `doc/tasks/progress.md` synchronized with completed work.
-- Ensure CLI commands match the contracts from `doc/detailed-design.md`.
-- Ensure all scripts return useful errors for missing paths or invalid inputs.
+- Thin `argparse` scripts that call package modules and return nonzero on invalid input or failed validation.
+- CPU-friendly shared test fixtures for tiny CSVs, images, checkpoints, and output directories.
+- A tiny integration path for train -> checkpoint -> generate -> validate.
+- README updates so documented commands match implemented flags and paths.
+- Progress tracker updates only when work is actually complete and verified.
 
-## Required Public Interfaces
+Verify:
 
-Implement these package/script surfaces unless a better local implementation requires a small naming adjustment:
+- `python -m pytest tests/test_scripts.py`
+- `python -m pytest`
+- `python -m compileall src scripts tests`
 
-```text
-src/brainrot_diffusion/conditions.py
-  build_condition_mappings(...)
-  condition ids: animal_id, object_id, pair_id
+## Subagent Plan
 
-src/brainrot_diffusion/data.py
-  BrainrotTrainDataset
-  GenerationRequestDataset
-  load_generation_requests(...)
+Use subagents only after the main agent has created the package scaffold and agreed on shared contracts for config, condition batch structure, checkpoint schema, and test fixtures.
 
-src/brainrot_diffusion/unet.py
-  model(x_t, t, conditions) -> epsilon_pred
+Good subagent candidates:
 
-src/brainrot_diffusion/diffusion.py
-  GaussianDiffusion
-  q_sample(...)
-  training_loss(...)
-  p_sample_ddpm(...)
-  ddim_step(...)
+- Data/conditions/config subagent: may edit only Workstream A files.
+- Model/diffusion/EMA/checkpoint subagent: may edit only Workstream B files.
+- Validation/evaluation/packaging subagent: may edit only Workstream D files.
+- Tests/docs subagent: may edit only `tests/`, `README.md`, and `doc/tasks/progress.md` after implementation interfaces settle.
 
-src/brainrot_diffusion/guidance.py
-  drop_conditions(...)
-  make_null_condition_batch(...)
-  combine_cfg(...)
+Main-agent-only or integration-sensitive work:
 
-src/brainrot_diffusion/ema.py
-  EMA helper
+- Initial scaffold and public contracts.
+- Training Loop and Sampling integration.
+- CLI script final wiring.
+- Full test suite fixes.
+- README final command reconciliation.
+- Final progress tracker status.
 
-src/brainrot_diffusion/checkpoint.py
-  save_checkpoint(...)
-  load_checkpoint(...)
-  export_model_pth(...)
+Shared files:
 
-scripts/train.py
-scripts/generate.py
-scripts/validate_submission.py
-scripts/evaluate.py
-scripts/prepare_score_input.py
-scripts/package_submission.py
-```
+- `configs/default.yaml`, `tests/` fixtures, and `doc/tasks/progress.md` can create conflicts. If subagents touch them, the main agent must merge deliberately and rerun relevant checks.
 
-Stable command targets:
+Subagent rules:
 
-```bash
-python scripts/train.py --config configs/default.yaml
-python scripts/generate.py --checkpoint checkpoints/best.pt --config configs/default.yaml --overwrite
-python scripts/validate_submission.py --generate-csv dataset/generate.csv --output-dir generated_images
-python scripts/evaluate.py --generate-csv dataset/generate.csv --output-dir generated_images
-python scripts/package_submission.py --checkpoint model.pth --zip-path HW6_STUDENT_ID.zip
-```
+- Give each subagent one task file and its write scope.
+- Tell subagents to read `doc/detailed-design.md`, relevant `doc/tasks/<module>.md`, and current files before editing.
+- Require subagents to report changed files and checks run.
+- Do not accept subagent changes that violate assignment constraints or bypass tests.
+
+## Implementation Order
+
+1. Read required docs and check current tree.
+   - Local check: `git status --short --branch`, `rg --files`.
+2. Scaffold package/test directories and config.
+   - Files: `src/brainrot_diffusion/__init__.py`, `configs/default.yaml`, `tests/`.
+   - Check: `python -m compileall src` after code exists.
+3. Implement Configuration.
+   - Check: `python -m pytest tests/test_config.py`.
+4. Implement Data Loading and Conditions.
+   - Check: `python -m pytest tests/test_data.py tests/test_conditions.py`.
+5. Implement Generator Model and Diffusion.
+   - Check: `python -m pytest tests/test_model.py tests/test_diffusion.py`.
+6. Implement EMA and Checkpointing.
+   - Check: `python -m pytest tests/test_ema.py tests/test_checkpoint.py`.
+7. Implement Training Loop with tiny CPU smoke path.
+   - Check: `python -m pytest tests/test_train_loop.py`.
+8. Implement Sampling/generation logic.
+   - Check: `python -m pytest tests/test_sample.py`.
+9. Implement Validation.
+   - Check: `python -m pytest tests/test_validate.py`.
+10. Implement Evaluation and Packaging.
+   - Check: `python -m pytest tests/test_evaluate.py tests/test_package.py`.
+11. Implement CLI scripts and script tests.
+   - Check: `python -m pytest tests/test_scripts.py`.
+12. Add/verify tiny integration path: train -> checkpoint -> generate -> validate.
+   - Check: `python -m pytest`.
+13. Update README and task progress.
+   - Check: README commands match implemented scripts.
+14. Run final quality gates after approval.
+   - Check: `python -m compileall src scripts tests`, `python -m pytest`, and applicable validation/evaluation/package commands when outputs exist.
 
 ## Testing and Quality Gates
 
-Add comprehensive unit tests and smoke tests. Keep tests fast enough for CPU execution by using tiny model settings and tiny temporary image fixtures.
+Known setup commands, not verified:
 
-Minimum required checks before completion:
+```bash
+python -m pip install -r requirements.txt
+python -m pip install -e .
+```
+
+Known core gates after implementation files exist:
 
 ```bash
 python -m compileall src scripts tests
 python -m pytest
 ```
 
-Also run script-level smoke checks where feasible:
+Known structural validation command after generated images exist:
 
 ```bash
-python scripts/validate_submission.py --generate-csv <tiny_generate_csv> --output-dir <tiny_generated_dir> --smoke
+python scripts/validate_submission.py --generate-csv dataset/generate.csv --output-dir generated_images --report-json reports/validation.json
 ```
 
-If you add Ruff or other configured tooling, run the corresponding repository-native checks, for example:
+Known local evaluation command after generated images exist:
 
 ```bash
-python -m ruff check .
-python -m ruff format --check .
+python scripts/evaluate.py --generate-csv dataset/generate.csv --output-dir generated_images --reference-dir hw6_reference --report-path reports/evaluation.json
 ```
 
-Do not invent a lint/type gate and then skip it. If a tool is configured or included as a development dependency, run it and fix issues. If a heavy local FID run is impractical during implementation, keep it behind a script and cover metric plumbing with tests or a tiny mocked path.
+Known scorer input command after generated images exist:
+
+```bash
+python scripts/prepare_score_input.py --generate-csv dataset/generate.csv --generated-images generated_images --score-input-dir score_input --test-mu hw6_reference/test_mu.npy --test-sigma hw6_reference/test_sigma.npy --scores fid --overwrite
+```
+
+Known packaging command before final submission, with real student ID:
+
+```bash
+python scripts/package_submission.py --generate-csv dataset/generate.csv --generated-images generated_images --checkpoint model.pth --student-id STUDENT_ID --overwrite
+```
+
+Known Codabench-style scorer command, not a unit-test gate:
+
+```bash
+python3 score.py --input_dir $input --output_dir $output --config config.json
+```
+
+Notes:
+
+- `scoring_program/score.py` hardcodes `cuda:0` and uses pretrained evaluation models, so keep it separate from core tests.
+- No lint, format, or type-check command is configured. Do not claim those gates passed unless tooling is added and run.
+- Any command that installs dependencies, runs tests, trains, generates, writes reports, packages, scores, or mutates files requires permission under `AGENTS.md`.
+
+## Progress Tracking
+
+Maintain `doc/tasks/progress.md` throughout implementation.
+
+Required progress behavior:
+
+- Mark a module started when coding begins.
+- Mark tasks complete only after the corresponding code and tests are in place.
+- Record blocked items with the exact missing decision, command failure, or external requirement.
+- Record verification with command names and short output summaries.
+- Update progress after each module or small workstream.
+- Do not mark full-project gates complete until those commands actually run and pass.
+
+If a module task file needs adjustment because implementation revealed a better boundary, update the task file and explain the reason in the final response.
+
+## Commit or Checkpoint Strategy
+
+Do not commit unless the user asks. If commits are requested, commit in logical groups:
+
+1. Scaffold/config/data/conditions.
+2. Model/diffusion/EMA/checkpointing.
+3. Training/sampling.
+4. Validation/evaluation/packaging.
+5. CLI/tests/docs.
+
+Without commits, keep the final diff grouped by workstream in the final response. Do not use destructive Git commands. Do not revert unrelated user changes.
+
+Generated artifacts, checkpoints, reports, final images, scorer inputs, and zip submissions should stay out of Git unless the user explicitly wants them tracked.
 
 ## Acceptance Criteria
 
-The implementation is complete when:
+Implementation is complete when:
 
-- `src/brainrot_diffusion/`, `scripts/`, `configs/`, `tests/`, and `requirements.txt` exist.
-- The main generator is implemented from scratch and does not load pretrained generative weights.
-- `scripts/train.py` can run a tiny CPU smoke training job and write a checkpoint with EMA and condition mappings.
-- `scripts/generate.py` can load a tiny checkpoint and write valid RGB 64x64 PNGs matching a generation CSV.
-- `scripts/validate_submission.py` validates exact filename/count/mode/size requirements.
-- `scripts/evaluate.py` runs validation first and computes or explicitly skips optional metrics.
-- `scripts/package_submission.py` refuses invalid artifacts and can package a valid fixture.
-- Unit tests cover every module task file.
+- `src/brainrot_diffusion/` exists with modules from `doc/detailed-design.md`.
+- `configs/default.yaml` exists and is used by train/generate flows.
+- `scripts/` contains train, generate, validate, evaluate, scorer-input preparation, and packaging CLIs.
+- `tests/` contains CPU-friendly unit and integration tests covering every current module.
+- Main generator is trained from scratch and does not load pretrained generative weights.
+- Tiny CPU training writes a checkpoint with required metadata.
+- Tiny checkpoint-backed generation writes exact CSV-matching RGB `64x64` PNGs.
+- Validation rejects missing, extra, corrupt, wrong-mode, wrong-format, and wrong-size outputs.
+- Evaluation validates first and reports metric skips explicitly when resources are unavailable.
+- Packaging validates first and rejects placeholder student ID or missing artifacts.
+- README matches actual implemented commands.
+- `doc/tasks/progress.md` reflects completed and verified work.
 - `python -m compileall src scripts tests` passes.
 - `python -m pytest` passes.
-- README reflects actual setup, train, generate, validate, evaluate, and package commands.
-- `doc/tasks/progress.md` marks a module complete only when all checklist items in that module task file are complete.
+- Structural validation passes for final `generated_images/` before scoring/packaging.
+- No unrelated files are changed.
 
-Full training a competitive model and producing final 2,000 scored images may require GPU time and Codabench attempts. Implement the full path, but use tiny smoke runs for automated verification unless GPU/time is available.
+Final submission readiness additionally requires:
 
-## Constraints and Safety Rules
-
-- No pretrained generative model weights.
-- No Diffusers pipelines or high-level pretrained generation/training flows.
-- Use only the provided Brainrot Dataset for the first implementation path.
-- Keep optional CLIP/open_clip support evaluation-only and clearly labeled as proxy if official hidden metadata is unavailable.
-- Generation must use checkpoint-saved condition mappings, not mappings rebuilt from `generate.csv`.
-- Do not revert unrelated user changes.
-- Do not remove dataset, reference stats, scorer, planning docs, or research notes.
-- Keep large generated outputs, checkpoints, reports, and zips out of git unless explicitly requested.
+- Exactly 2,000 generated PNG files matching `dataset/generate.csv`.
+- All final images are RGB and `64x64`.
+- `model.pth` or selected checkpoint can reproduce generation.
+- Final `HW6_{student_id}.zip` uses a real student ID and contains required artifacts.
+- Any auxiliary pretrained evaluation usage is documented and does not affect final-image generation.
 
 ## Uncertainty Protocol
 
-Make these conservative defaults unless blocked:
+Make conservative, documented assumptions when safe:
 
-- Use pip/`requirements.txt`, not uv-only tooling.
-- Disable random horizontal flip by default until visual inspection justifies enabling it.
-- Keep local CLIP-T proxy optional; official CLIP-T comes from Codabench.
-- Use DDIM as the default final sampler and DDPM as a debugging sampler.
-- Use config-driven batch size, gradient accumulation, mixed precision, channel width, and sampling steps because GPU budget is unknown.
-- Require student id or explicit zip path at packaging time rather than guessing the final `HW6_{student_id}.zip` name.
+- Use pip/`requirements.txt`; do not introduce another package manager as a requirement.
+- Keep pair mappings stable and fail clearly for unsupported generation pairs.
+- Treat generation prompt mismatch as a warning unless strict validation is chosen and documented.
+- Keep local CLIP-T proxy disabled/skipped unless the user explicitly approves adding CLIP support.
+- Use DDIM as the default final sampler after the DDPM objective works; keep DDPM useful for debugging if implemented.
+- Keep model width, batch size, gradient accumulation, mixed precision, EMA decay, sampling steps, and guidance scale config-driven because hardware budget is unknown.
+- Require real student ID at packaging time; do not guess it.
 
-If genuinely blocked, ask a concise question naming the file/module and the exact decision needed. Otherwise proceed with the conservative assumption, document it in config/README where relevant, and keep coding.
+Ask the user only when blocked by:
+
+- A risky assignment-rule interpretation.
+- Adding pretrained CLIP/VAE or extra data.
+- Running expensive training/generation/scoring.
+- Installing dependencies or needing network access.
+- Overwriting generated images, checkpoints, reports, or submissions.
+- Missing credentials, external services, or student ID.
+- A destructive Git or filesystem action.
+
+## Final Response Requirements
+
+When implementation is finished, respond concisely with:
+
+- Implementation summary grouped by workstream.
+- Changed files grouped by module/workstream.
+- Tests and quality gates run, with command output summaries.
+- Commands not run and why.
+- Generated artifacts created, if any.
+- Known limitations and open questions.
+- Follow-up required before full training, Codabench upload, or final E3 packaging.
+
+Do not claim a command passed unless it was actually run. Do not claim final submission readiness unless the 2,000 generated images and packaging gates have been validated.

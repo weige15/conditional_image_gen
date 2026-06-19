@@ -1,0 +1,73 @@
+data:
+  train_csv: dataset/train.csv
+  generate_csv: dataset/generate.csv
+  train_image_dir: dataset/trainset
+  image_size: 64
+  resize_train_images: true
+  strict_prompt: false
+
+model:
+  name: compact_unet
+  image_size: 64
+  in_channels: 3
+  out_channels: 3
+  base_channels: 64
+  channel_multipliers: [1, 2, 4]
+  embedding_dim: 256
+  dropout: 0.1
+
+diffusion:
+  timesteps: 1000
+  schedule: cosine
+  beta_start: 0.0001
+  beta_end: 0.02
+
+training:
+  batch_size: 64
+  max_steps: 100000
+  learning_rate: 0.0002
+  weight_decay: 0.0
+  num_workers: 4
+  seed: 1337
+  save_every: 1000
+  log_every: 50
+  mixed_precision: true
+  condition_dropout: 0.1
+  resume_checkpoint: ""
+
+sampling:
+  sampler: ddim
+  steps: 100
+  batch_size: 64
+  seed: 2025
+  guidance_scale: 2.0
+  eta: 0.0
+  output_dir: generated_images
+  overwrite: false
+
+checkpointing:
+  checkpoint_dir: checkpoints
+  keep_last: 5
+  use_ema: true
+  ema_decay: 0.999
+  export_model_path: model.pth
+
+validation:
+  output_dir: generated_images
+  report_json: reports/validation.json
+  expected_count: 2000
+  image_size: 64
+
+evaluation:
+  reference_dir: hw6_reference
+  report_path: reports/evaluation.json
+  run_fid: true
+  run_clip_proxy: false
+
+packaging:
+  student_id: STUDENT_ID
+  generated_images: generated_images
+  checkpoint: model.pth
+  zip_dir: .
+  overwrite: false
+

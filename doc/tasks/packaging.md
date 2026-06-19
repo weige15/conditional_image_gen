@@ -2,24 +2,43 @@
 
 ## Goal
 
-Create the final assignment zip only after required artifacts and generated images are valid.
+Implement final E3 zip creation after generated outputs and required artifacts pass validation.
 
 ## Inputs
 
-- `doc/proposal.md`: required HW6 zip structure.
-- `doc/detailed-design.md`: Packaging module inputs, failure handling, and tests.
+- `doc/proposal.md`: Final E3 package must include generated images, scripts, `model.pth`, `README.md`, and `requirements.txt`.
+- `doc/high-level-design.md`: Packaging owns `src/brainrot_diffusion/package.py` and refuses invalid outputs.
+- `doc/detailed-design.md`: Packaging validates images, requires real student ID, verifies artifacts, builds a manifest, and writes `HW6_{student_id}.zip`.
+- `doc/test-plan.md`: Packaging tests cover invalid-output refusal, required files, zip entries, and placeholder student ID rejection.
+
+## Write Scope
+
+`src/brainrot_diffusion/package.py`, `scripts/package_submission.py`, packaging tests under `tests/`, and package manifest/report helpers.
+
+## Read Scope
+
+Validation module, `generated_images/`, `scripts/`, `src/brainrot_diffusion/`, `configs/`, `model.pth`, `README.md`, `requirements.txt`, and assignment package requirements.
+
+## Dependencies
+
+Validation, CLI Scripts, generated images, final checkpoint or `model.pth`, and real student ID.
 
 ## Tasks
 
-- [x] Create `src/brainrot_diffusion/package.py`.
-- [x] Create `scripts/package_submission.py` with args for checkpoint/model path, generated images, student id or zip path, and overwrite.
-- [x] Verify required artifacts: `generated_images/`, `scripts/`, `src/brainrot_diffusion/`, `model.pth`, `README.md`, and `requirements.txt`.
-- [x] Run submission validation before creating the zip.
-- [x] Write the zip with the assignment-required top-level structure and reject existing zip without explicit overwrite.
-- [x] Add tests for valid fixture packaging, expected zip entries, missing `model.pth`, invalid generated image, and existing zip behavior.
+- [x] Implement packaging entry point that runs Validation before writing any zip.
+- [x] Verify required artifacts and reject missing paths with a clear list.
+- [x] Reject placeholder or missing student ID.
+- [x] Write zip with required assignment layout and reproducibility files.
+- [x] Refuse existing zip unless overwrite is explicit.
+- [x] Add tests for tiny valid package, zip entry inspection, invalid generated output, missing `model.pth`, and placeholder student ID.
+
+## Tests and Quality Gates
+
+- [x] `python -m pytest tests/test_package.py`
+- [ ] `python scripts/package_submission.py --generate-csv dataset/generate.csv --generated-images generated_images --checkpoint model.pth --student-id STUDENT_ID --overwrite` with real student ID before final submission.
 
 ## Done When
 
-- [x] Packaging refuses invalid or incomplete submissions.
-- [x] A valid fixture produces an inspectable zip with expected entries.
-- [x] Packaging tests pass independently.
+- [x] Packaging creates `HW6_{student_id}.zip` only after valid generated outputs.
+- [x] Required files are present in the archive.
+- [x] Packaging tests pass.

@@ -2,24 +2,43 @@
 
 ## Goal
 
-Implement the end-to-end training lifecycle for the conditional DDPM model.
+Implement a minimal reproducible training lifecycle that can run a tiny CPU smoke train and later scale to full Brainrot training.
 
 ## Inputs
 
-- `doc/proposal.md`: training objective, AdamW, EMA, condition dropout, and full-model experiment path.
-- `doc/detailed-design.md`: Training Loop responsibilities, dependencies, and tests.
+- `doc/proposal.md`: Training must use PyTorch directly, save checkpoints, and start with smoke runs before full GPU training.
+- `doc/high-level-design.md`: Training Loop owns `src/brainrot_diffusion/train_loop.py` and orchestrates config, data, conditions, model, diffusion, EMA, and checkpointing.
+- `doc/detailed-design.md`: Training step samples timesteps, optionally drops conditions, computes diffusion loss, updates optimizer/EMA, logs, and checkpoints.
+- `doc/test-plan.md`: Training tests must run tiny CPU training, produce finite losses, and write checkpoints with metadata.
+
+## Write Scope
+
+`src/brainrot_diffusion/train_loop.py`, `scripts/train.py` integration, training tests under `tests/`, and smoke config fixtures.
+
+## Read Scope
+
+Configuration, Data Loading, Conditions, Generator Model, Diffusion, EMA, Checkpointing, `dataset/train.csv`, and `dataset/trainset/`.
+
+## Dependencies
+
+Configuration, Data Loading, Conditions, Generator Model, Diffusion, EMA, and Checkpointing.
 
 ## Tasks
 
-- [x] Create `src/brainrot_diffusion/config.py` and `configs/default.yaml` with paths, model, diffusion, optimizer, EMA, sampling, and logging settings.
-- [x] Create `src/brainrot_diffusion/train_loop.py` with `train(config)`.
-- [x] Create `scripts/train.py` as a thin CLI around config loading and `train(config)`.
-- [x] Wire dataset, mappings, UNet, diffusion, AdamW, condition dropout, EMA, checkpoint cadence, and optional resume.
-- [x] Stop clearly on missing paths, invalid config, non-finite loss, or incompatible resume checkpoint.
-- [x] Add a CPU smoke test using a tiny model, tiny dataset fixture, `max_steps=2`, checkpoint write, and resume.
+- [x] Implement fresh training entry point using resolved config and assignment dataset paths.
+- [x] Seed Python, NumPy, and PyTorch where practical and record seed metadata.
+- [x] Build dataloader, mappings, model, diffusion object, optimizer, and optional EMA.
+- [x] Implement bounded training loop with finite-loss checks, optimizer steps, EMA updates, logs, and checkpoint cadence.
+- [x] Implement resume validation if resume support is included.
+- [x] Add tiny CPU smoke test that trains for a few steps and writes a metadata-complete checkpoint.
+
+## Tests and Quality Gates
+
+- [x] `python -m pytest tests/test_train_loop.py`
+- [x] Tiny training smoke path runs on CPU without full dataset generation.
 
 ## Done When
 
-- [x] `python scripts/train.py --config configs/default.yaml` is the intended full-training entrypoint.
-- [x] A tiny smoke training run writes a checkpoint with finite loss and EMA state.
-- [x] Training-loop smoke tests pass.
+- [x] A tiny CPU training run produces finite loss and a checkpoint.
+- [x] Checkpoint includes config, mappings, diffusion metadata, architecture metadata, seed metadata, and step.
+- [x] Training-loop tests pass.
